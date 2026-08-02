@@ -1,0 +1,227 @@
+@page "/"
+@implements IDisposable
+@inject TriggerEngine Engine
+@inject ConfigurationStore Config
+@inject ProPresenterClient Client
+@inject TimerStream Stream
+
+<PageTitle>Dashboard — ProPresenter Utilities</PageTitle>
+
+<div class="page-head">
+    <h1>Dashboard</h1>
+    <p>Live timer state and the cues armed against each one.</p>
+</div>
+
+@if (Engine.ConnectionStatus.State != ConnectionState.Connected)
+{
+    <div class="warning-banner">
+        Not connected to ProPresenter at <strong>@Client.Endpoint.BaseUri.Authority</strong>.
+        @if (Engine.ConnectionStatus.LastError is { } error)
+        {
+            <span>(@error)</span>
+        }
+        Triggers cannot fire until the connection is restored.
+        <button class="small" @onclick="() => Stream.Reconnect()">Retry now</button>
+    </div>
+}
+
+<div class="card">
+    <div class="row">
+        <label class="switch" style="margin: 0;">
+            <input type="checkbox" checked="@Configuration.TriggersArmed" @onchange="ToggleArmed" />
+            <span><strong>Triggers armed</strong></span>
+        </label>
+        @if (!Configuration.TriggersArmed)
+        {
+            <span class="badge warn">Disarmed — nothing will fire</span>
+        }
+
+        <span class="spacer"></span>
+
+        <label style="margin: 0;">Active profile</label>
+        <select value="@Configuration.ActiveProfileId" @onchange="ChangeProfile">
+            @foreach (var profile in Configuration.Profiles)
+            {
+                <option value="@profile.Id">@profile.Name</option>
+            }
+        </select>
+        <span class="badge info">@RuleCount armed @(RuleCount == 1 ? "rule" : "rules")</span>
+
+        <span class="spacer"></span>
+
+        <button class="small" @onclick="() => StartAll()">Start all</button>
+        <button class="small" @onclick="() => StopAll()">Stop all</button>
+        <button class="small" @onclick="() => ResetAll()">Reset all</button>
+    </div>
+</div>
+
+@if (Timers.Count == 0)
+{
+    <div class="card">
+        <p class="empty">
+            No timers reported by ProPresenter. Create one on the
+            <a href="timers">Timers</a> page, or in ProPresenter itself.
+        </p>
+    </div>
+}
+else
+{
+    <div class="grid cols-2">
+        @foreach (var timer in Timers)
+        {
+            var state = timer.Observation.State;
+            var rules = RulesFor(timer);
+
+            <div class="card timer-card state-@state.ToString().ToLowerInvariant()">
+                <div class="card-head">
+                    <h2>@timer.Id</h2>
+                    <span class="badge @StateBadge(state)">@state.ToString().ToLowerInvariant()</span>
+                </div>
+
+                <div class="timer-clock @(timer.Observation.Value < TimeSpan.Zero ? "negative" : "")">
+                    @TimeCode.Format(timer.Observation.Value)
+                </div>
+
+                @if (Fraction(timer) is { } fraction)
+                {
+                    <div class="progress @(timer.Observation.Value < TimeSpan.Zero ? "overrun" : "")">
+                        <div style="width: @($"{fraction * 100:0.#}")%"></div>
+                    </div>
+                }
+
+                <div class="timer-meta">
+                    @KindLabel(timer)
+                    @if (timer.Observation.Elapsed is { } elapsed)
+                    {
+                        <span> · @TimeCode.Format(elapsed) elapsed</span>
+                    }
+                    @if (timer.Observation.Remaining is { } remaining)
+                    {
+                        <span> · @TimeCode.Format(remaining) remaining</span>
+                    }
+                </div>
+
+                <div class="row" style="margin-top: 0.6rem;">
+                    <button class="small" @onclick="() => Operate(timer, TimerOperation.Start)">Start</button>
+                    <button class="small" @onclick="() => Operate(timer, TimerOperation.Stop)">Stop</button>
+                    <button class="small" @onclick="() => Operate(timer, TimerOperation.Reset)">Reset</button>
+                    <button class="small" @onclick="() => Increment(timer, 60)" title="Add one minute">+1:00</button>
+                    <button class="small" @onclick="() => Increment(timer, -60)" title="Remove one minute">−1:00</button>
+                </div>
+
+                <div style="margin-top: 0.75rem;">
+                    <h3>Cues</h3>
+                    @if (rules.Count == 0)
+                    {
+                        <p class="empty" style="padding: 0;">
+                            No triggers on this timer. <a href="triggers">Add one</a>.
+                        </p>
+                    }
+                    else
+                    {
+                        <ul class="upcoming">
+                            @foreach (var (rule, until) in TriggerTiming.Schedule(rules, timer.Observation, timer.Configuration?.Kind ?? TimerKind.Unknown))
+                            {
+                                <li class="@UpcomingClass(until, timer)">
+                                    @* Deep link straight to this rule's editor, opened and scrolled to. *@
+                                    <a class="cue-link" href="@($"triggers?rule={rule.Id}")"
+                                       title="Edit this trigger">@rule.DisplayName</a>
+
+                                    @* With no custom name the title already is the condition. *@
+                                    @if (!string.IsNullOrWhiteSpace(rule.Name))
+                                    {
+                                        <span> — @rule.ConditionDescription</span>
+                                    }
+
+                                    @if (until is { } value && timer.Observation.IsCounting)
+                                    {
+                                        <span class="mono">
+                                            @(value > TimeSpan.Zero ? $" (in {TimeCode.FormatCompact(value)})" : " (passed)")
+                                        </span>
+                                    }
+                                </li>
+                            }
+                        </ul>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+}
+
+<div class="card">
+    <div class="card-head">
+        <h2>Recent activity</h2>
+        <a href="activity">View all</a>
+    </div>
+    <ActivityFeed Max="12" />
+</div>
+
+@code {
+    private AppConfiguration Configuration => Config.Current;
+    private IReadOnlyList<TimerSnapshot> Timers => Engine.Timers;
+
+    private int RuleCount => Configuration.ActiveProfile?.Rules.Count(r => r.Enabled) ?? 0;
+
+    protected override void OnInitialized() => Engine.Updated += OnUpdated;
+
+    private void OnUpdated() => InvokeAsync(StateHasChanged);
+
+    private List<TriggerRule> RulesFor(TimerSnapshot timer) =>
+        Configuration.ActiveProfile?.Rules.Where(r => r.Timer.Matches(timer.Id)).ToList() ?? [];
+
+    private static string StateBadge(TimerState state) => state switch
+    {
+        TimerState.Running => "ok",
+        TimerState.Overrunning or TimerState.Overran => "danger",
+        TimerState.Complete => "info",
+        _ => "",
+    };
+
+    private static string KindLabel(TimerSnapshot timer) => timer.Configuration?.Kind switch
+    {
+        TimerKind.Countdown => $"Countdown from {TimeCode.Format(timer.Configuration.TotalDuration ?? TimeSpan.Zero)}",
+        TimerKind.CountDownToTime => "Countdown to time of day",
+        TimerKind.Elapsed => "Elapsed",
+        _ => "Unknown configuration",
+    };
+
+    /// <summary>Progress through the timer as 0–1, where a total length is known.</summary>
+    private static double? Fraction(TimerSnapshot timer)
+    {
+        var total = timer.Configuration?.TotalDuration;
+        if (total is not { TotalSeconds: > 0 } length || timer.Observation.Elapsed is not { } elapsed) return null;
+
+        return Math.Clamp(elapsed.TotalSeconds / length.TotalSeconds, 0, 1);
+    }
+
+    private static string UpcomingClass(TimeSpan? until, TimerSnapshot timer)
+    {
+        if (until is not { } value || !timer.Observation.IsCounting) return string.Empty;
+        if (value <= TimeSpan.Zero) return "passed";
+        return value <= TimeSpan.FromSeconds(30) ? "imminent" : string.Empty;
+    }
+
+    private Task Operate(TimerSnapshot timer, TimerOperation operation) =>
+        Client.TimerOperationAsync(timer.Id.ToRouteValue(), operation);
+
+    private Task Increment(TimerSnapshot timer, int seconds) =>
+        Client.IncrementTimerAsync(timer.Id.ToRouteValue(), seconds);
+
+    private Task StartAll() => Client.AllTimersOperationAsync(TimerOperation.Start);
+    private Task StopAll() => Client.AllTimersOperationAsync(TimerOperation.Stop);
+    private Task ResetAll() => Client.AllTimersOperationAsync(TimerOperation.Reset);
+
+    private void ToggleArmed(ChangeEventArgs e) =>
+        Config.Update(c => c with { TriggersArmed = e.Value is true });
+
+    private void ChangeProfile(ChangeEventArgs e)
+    {
+        if (Guid.TryParse(e.Value?.ToString(), out var id))
+        {
+            Config.Update(c => c with { ActiveProfileId = id });
+        }
+    }
+
+    public void Dispose() => Engine.Updated -= OnUpdated;
+}

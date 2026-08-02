@@ -1,0 +1,43 @@
+# systemd unit for ProPresenter Utilities.
+#
+# Install to /etc/systemd/system/, edit User/Group and the paths, then:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now propresenter-utilities
+#
+# For a per-user service instead, drop this in ~/.config/systemd/user/, remove the User/Group lines,
+# and use `systemctl --user enable --now propresenter-utilities`.
+
+[Unit]
+Description=ProPresenter Utilities - timer-driven cue triggers
+Documentation=https://github.com/AshersLab/propresenter-utilities
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# The host calls UseSystemd(), so it reports readiness properly under Type=notify.
+Type=notify
+ExecStart=/opt/propresenter-utilities/ProPresenter.App
+WorkingDirectory=/opt/propresenter-utilities
+
+User=propresenter
+Group=propresenter
+
+# Loopback only: neither this UI nor the ProPresenter API is authenticated.
+Environment=PROPRESENTER_UTILITIES_URLS=http://127.0.0.1:8752
+# Absolute path, so the service does not depend on the account's home directory.
+Environment=PROPRESENTER_UTILITIES_CONFIG=/var/lib/propresenter-utilities/config.json
+Environment=DOTNET_NOLOGO=1
+
+# A dropped ProPresenter connection is handled internally; a restart here means the process died.
+Restart=always
+RestartSec=5
+
+# The service needs nothing beyond its own config directory and outbound HTTP.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/propresenter-utilities
+
+[Install]
+WantedBy=multi-user.target

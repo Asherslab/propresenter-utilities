@@ -1,0 +1,38 @@
+@implements IDisposable
+@inject ActivityLog Log
+
+<div class="activity">
+    @if (Entries.Count == 0)
+    {
+        <p class="empty">Nothing has happened yet.</p>
+    }
+    else
+    {
+        @foreach (var entry in Entries)
+        {
+            <div class="activity-entry level-@entry.Level.ToString().ToLowerInvariant()">
+                <time>@entry.At.ToString("HH:mm:ss")</time>
+                <div class="msg">
+                    @entry.Message
+                    @if (!string.IsNullOrWhiteSpace(entry.Detail))
+                    {
+                        <div class="detail">@entry.Detail</div>
+                    }
+                </div>
+            </div>
+        }
+    }
+</div>
+
+@code {
+    /// <summary>Caps how many entries are rendered. The dashboard shows a short tail; the activity page shows all.</summary>
+    [Parameter] public int Max { get; set; } = int.MaxValue;
+
+    private List<ActivityEntry> Entries => Log.Recent.Take(Max).ToList();
+
+    protected override void OnInitialized() => Log.Changed += OnChanged;
+
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Log.Changed -= OnChanged;
+}

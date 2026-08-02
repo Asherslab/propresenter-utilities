@@ -1,0 +1,202 @@
+@* Searchable replacement for a flat select over the whole action catalog.
+
+   With ~120 actions a native dropdown is a wall of text that has to be scrolled and read in full.
+   This filters as you type across name, category and description, and shows the description inline
+   so the right entry can be recognised rather than guessed at. *@
+
+<div class="picker @(_open ? "open" : "")">
+    <button type="button" class="picker-button @(Selected is null ? "unset" : "")" @onclick="Toggle">
+        @if (Selected is { } chosen)
+        {
+            <span class="picker-category">@chosen.Category</span>
+            <span class="picker-name">@chosen.Name</span>
+        }
+        else
+        {
+            <span class="picker-name">Choose an action…</span>
+        }
+        <span class="picker-caret">▾</span>
+    </button>
+
+    @if (_open)
+    {
+        @* Centred overlay rather than a dropdown anchored to the button: an anchored panel gets
+           clipped when the action row sits near the bottom of a long rule list, and a command-palette
+           layout suits a searchable list of this size better anyway. *@
+        <div class="picker-backdrop" @onclick="Close"></div>
+
+        <div class="picker-panel">
+            <input @ref="_searchBox"
+                   class="picker-search"
+                   placeholder="Search actions — try “playlist”, “macro”, “audio”…"
+                   value="@_search"
+                   @oninput="OnSearchInput"
+                   @onkeydown="OnKeyDown" />
+
+            <div class="picker-results">
+                @if (_matches.Count == 0)
+                {
+                    <p class="empty" style="padding: 0.75rem;">No actions match “@_search”.</p>
+                }
+                else
+                {
+                    @foreach (var group in _matches.GroupBy(a => a.Category))
+                    {
+                        <div class="picker-group">@group.Key</div>
+                        @foreach (var action in group)
+                        {
+                            <button type="button"
+                                    class="picker-item @(action.Id == Value ? "selected" : "")"
+                                    @onclick="() => Choose(action)">
+                                <span class="picker-item-name">@action.Name</span>
+                                <span class="picker-item-desc">@action.Description</span>
+                            </button>
+                        }
+                    }
+                }
+            </div>
+
+            <div class="picker-foot">
+                @_matches.Count of @ActionCatalog.All.Count actions
+                @if (!string.IsNullOrWhiteSpace(_search))
+                {
+                    <button type="button" class="link" @onclick="ClearSearch">clear</button>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    /// <summary>The selected action id, or empty when nothing has been chosen yet.</summary>
+    [Parameter] public string Value { get; set; } = string.Empty;
+
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+
+    private bool _open;
+    private string _search = string.Empty;
+    private ElementReference _searchBox;
+    private bool _focusPending;
+
+    private List<ActionDefinition> _matches = ActionCatalog.All.ToList();
+
+    private ActionDefinition? Selected => string.IsNullOrEmpty(Value) ? null : ActionCatalog.Find(Value);
+
+    private void Toggle()
+    {
+        _open = !_open;
+        if (!_open) return;
+
+        // Reopening always starts from the full list; the previous search is rarely what you want next.
+        _search = string.Empty;
+        Filter();
+        _focusPending = true;
+    }
+
+    private void Close() => _open = false;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_focusPending) return;
+
+        _focusPending = false;
+        try
+        {
+            await _searchBox.FocusAsync();
+        }
+        catch (Exception)
+        {
+            // The element can already be gone if the panel was dismissed in the same frame.
+        }
+    }
+
+    private void OnSearchInput(ChangeEventArgs e)
+    {
+        _search = e.Value?.ToString() ?? string.Empty;
+        Filter();
+    }
+
+    private void ClearSearch()
+    {
+        _search = string.Empty;
+        Filter();
+        _focusPending = true;
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case "Escape":
+                Close();
+                break;
+
+            // Enter picks the top match, so a distinctive search plus Enter is the fast path.
+            case "Enter" when _matches.Count > 0:
+                await Choose(_matches[0]);
+                break;
+        }
+    }
+
+    private void Filter()
+    {
+        var terms = _search.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        if (terms.Length == 0)
+        {
+            _matches = ActionCatalog.All.ToList();
+            return;
+        }
+
+        // Every term must appear somewhere, so "audio playlist" narrows rather than widens.
+        _matches = ActionCatalog.All
+            .Select(action => (Action: action, Score: Score(action, terms)))
+            .Where(x => x.Score > 0)
+            .OrderByDescending(x => x.Score)
+            .ThenBy(x => x.Action.Category, StringComparer.OrdinalIgnoreCase)
+            .Select(x => x.Action)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Ranks a match. A name hit beats a category hit, which beats a description hit, so searching
+    /// "macro" puts "Trigger macro" first rather than everything that mentions macros.
+    /// </summary>
+    private static int Score(ActionDefinition action, string[] terms)
+    {
+        var total = 0;
+
+        foreach (var term in terms)
+        {
+            var score = 0;
+
+            if (action.Name.Contains(term, StringComparison.OrdinalIgnoreCase))
+            {
+                score = action.Name.StartsWith(term, StringComparison.OrdinalIgnoreCase) ? 100 : 60;
+            }
+            else if (action.Category.Contains(term, StringComparison.OrdinalIgnoreCase))
+            {
+                score = 30;
+            }
+            else if (action.Description.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || action.Id.Contains(term, StringComparison.OrdinalIgnoreCase))
+            {
+                score = 10;
+            }
+
+            if (score == 0) return 0; // this term matched nothing — reject the action outright
+            total += score;
+        }
+
+        return total;
+    }
+
+    private async Task Choose(ActionDefinition action)
+    {
+        Close();
+        if (action.Id == Value) return;
+
+        Value = action.Id;
+        await ValueChanged.InvokeAsync(action.Id);
+    }
+}

@@ -1,0 +1,234 @@
+@page "/signals"
+@implements IDisposable
+@inject SignalBus Bus
+@inject RossTalkListener Listener
+@inject ConfigurationStore Config
+@inject UiActivity Activity
+@inject NavigationManager Nav
+
+<PageTitle>Signals — ProPresenter Utilities</PageTitle>
+
+<div class="page-head">
+    <h1>Signals</h1>
+    <p>
+        How a ProPresenter macro reaches this app. Attach a trigger to a signal on the
+        <a href="triggers">Triggers</a> page and it can run any action a timer trigger can.
+    </p>
+</div>
+
+<div class="card">
+    <div class="card-head">
+        <h2>RossTalk listener</h2>
+        <span class="badge @StatusBadge">@StatusText</span>
+    </div>
+
+    <div class="row" style="align-items: flex-end;">
+        <div class="field">
+            <label class="switch">
+                <input type="checkbox" checked="@_enabled" @onchange="ToggleEnabled" />
+                <span>Listen for RossTalk</span>
+            </label>
+        </div>
+        <div class="field">
+            <label>Port</label>
+            <input type="number" @bind="_port" />
+        </div>
+        <div class="field">
+            <button class="primary" @onclick="SaveListener">Save and restart listener</button>
+        </div>
+    </div>
+
+    @if (Listener.Status is { State: ListenerState.Failed, LastError: { } error })
+    {
+        <div class="warning-banner">
+            Could not listen on port @Listener.Status.Port: @error
+            <div class="hint">Something else is probably using the port. Pick another and update ProPresenter to match.</div>
+        </div>
+    }
+
+    <div class="timer-meta">
+        @if (Listener.Status.State == ListenerState.Listening)
+        {
+            <span>
+                Listening on port @Listener.Status.Port —
+                @Listener.Status.ConnectedClients connected
+                @(Listener.Status.ConnectedClients == 1 ? "client" : "clients").
+            </span>
+            @if (Listener.Status.ConnectedClients == 0)
+            {
+                <span> ProPresenter has not connected yet.</span>
+            }
+        }
+        else if (Listener.Status.State == ListenerState.Disabled)
+        {
+            <span>The listener is switched off.</span>
+        }
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-head">
+        <h2>Live signals</h2>
+        <button class="small" @onclick="() => _cleared = Bus.Recent.Count">Clear view</button>
+    </div>
+
+    <p class="hint">
+        Run your macro in ProPresenter and it should appear here within a moment. Use
+        <strong>Attach a trigger</strong> to jump straight to a new rule bound to that signal.
+    </p>
+
+    @if (Visible.Count == 0)
+    {
+        <p class="empty">No signals received yet.</p>
+    }
+    else
+    {
+        <table>
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Signal</th>
+                    <th>Meaning</th>
+                    <th>Source</th>
+                    <th>Rules fired</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var signal in Visible)
+                {
+                    <tr class="@(signal.MatchedRules == 0 ? "muted" : "")">
+                        <td class="mono">@signal.At.ToString("HH:mm:ss")</td>
+                        <td class="mono"><strong>@signal.Key</strong></td>
+                        <td>@RossTalk.Describe(signal.Key)</td>
+                        <td class="timer-meta">@signal.Origin</td>
+                        <td>
+                            @if (signal.MatchedRules == 0)
+                            {
+                                <span class="badge warn">none</span>
+                            }
+                            else
+                            {
+                                <span class="badge ok">@signal.MatchedRules</span>
+                            }
+                        </td>
+                        <td>
+                            <button class="small" @onclick="() => AttachTrigger(signal.Key)">Attach a trigger</button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</div>
+
+<div class="card">
+    <h2>Sending a signal from a ProPresenter macro</h2>
+
+    <p class="hint">
+        ProPresenter macros cannot make HTTP requests, but they can send RossTalk — a one-line text
+        command over the network. That is what this listener is for.
+    </p>
+
+    <ol class="steps">
+        <li>
+            In ProPresenter, open <strong>Preferences → Devices</strong>, add a <strong>RossTalk</strong>
+            device, and set its address to this machine
+            (<span class="mono">@ThisHost</span>) and its port to
+            <span class="mono">@(_port)</span>. Click <strong>Connect</strong> — the indicator turns green,
+            and the count above becomes 1.
+        </li>
+        <li>
+            Edit the macro you want to signal from and add a <strong>Communication → RossTalk →
+            Trigger GPI</strong> action. Give it a GPI number you are not otherwise using, say 1.
+        </li>
+        <li>
+            Run the macro. <span class="mono">GPI 1</span> appears in the table above.
+        </li>
+        <li>
+            Click <strong>Attach a trigger</strong> next to it, choose your action — for cancelling an
+            auto-advance, that is <strong>Transport → Cancel auto-advance</strong> — and you are done.
+        </li>
+    </ol>
+
+    <div class="warning-banner">
+        ProPresenter only offers RossTalk devices on macOS; the Windows build supports MIDI devices
+        only. If ProPresenter runs on Windows, use the webhook below with a bridge such as Companion.
+    </div>
+
+    <h3>Webhook</h3>
+    <p class="hint">
+        Anything that can make an HTTP request can raise a signal — Companion, a Stream Deck, a script,
+        another automation system:
+    </p>
+    <p class="mono" style="word-break: break-all;">@Nav.BaseUri.TrimEnd('/')/api/signals/start-service</p>
+    <p class="hint">
+        GET or POST both work. That arrives as the signal
+        <span class="mono">webhook:start-service</span>. Any name you like after the last slash.
+    </p>
+</div>
+
+@code {
+    private bool _enabled = true;
+    private int _port = RossTalk.DefaultPort;
+    private int _cleared;
+
+    /// <summary>Signals newer than the last "clear view", so the table can be reset without losing history.</summary>
+    private List<SignalEvent> Visible => Bus.Recent.Take(Math.Max(0, Bus.Recent.Count - _cleared)).ToList();
+
+    private string ThisHost => Nav.ToAbsoluteUri(Nav.Uri).Host;
+
+    private string StatusText => Listener.Status.State switch
+    {
+        ListenerState.Listening => "Listening",
+        ListenerState.Failed => "Failed",
+        _ => "Off",
+    };
+
+    private string StatusBadge => Listener.Status.State switch
+    {
+        ListenerState.Listening => "ok",
+        ListenerState.Failed => "danger",
+        _ => "",
+    };
+
+    protected override void OnInitialized()
+    {
+        Activity.Touch();
+
+        var settings = Config.Current.Signals;
+        _enabled = settings.RossTalkEnabled;
+        _port = settings.RossTalkPort;
+
+        Bus.Changed += OnChanged;
+        Listener.StatusChanged += OnChanged;
+    }
+
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+
+    private void ToggleEnabled(ChangeEventArgs e)
+    {
+        _enabled = e.Value is true;
+        SaveListener();
+    }
+
+    private void SaveListener()
+    {
+        Config.Update(c => c with
+        {
+            Signals = new SignalSettings { RossTalkEnabled = _enabled, RossTalkPort = _port },
+        });
+
+        // The listener watches for setting changes, but nudge it so the UI reacts immediately.
+        Listener.Restart();
+    }
+
+    private void AttachTrigger(string key) =>
+        Nav.NavigateTo($"triggers?signal={Uri.EscapeDataString(key)}");
+
+    public void Dispose()
+    {
+        Bus.Changed -= OnChanged;
+        Listener.StatusChanged -= OnChanged;
+    }
+}

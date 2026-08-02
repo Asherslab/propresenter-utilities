@@ -1,0 +1,45 @@
+@inherits LayoutComponentBase
+@implements IDisposable
+@inject TriggerEngine Engine
+@inject ProPresenterEndpoint Endpoint
+
+<div class="shell">
+    <aside class="sidebar">
+        <div class="brand">
+            <strong>ProPresenter Utilities</strong>
+            <span>Timer triggers</span>
+        </div>
+        <nav>
+            <NavLink href="" Match="NavLinkMatch.All">Dashboard</NavLink>
+            <NavLink href="triggers">Triggers</NavLink>
+            <NavLink href="timers">Timers</NavLink>
+            <NavLink href="signals">Signals</NavLink>
+            <NavLink href="activity">Activity</NavLink>
+            <NavLink href="settings">Settings</NavLink>
+        </nav>
+        <div class="foot">
+            <ConnectionBadge />
+            <div class="hint">@Endpoint.BaseUri.Authority</div>
+        </div>
+    </aside>
+
+    <main class="content">
+        @Body
+    </main>
+</div>
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">🗙</span>
+</div>
+
+@code {
+    protected override void OnInitialized() => Engine.Updated += OnUpdated;
+
+    // The footer badge reflects live connection state. Updates arrive at ProPresenter's
+    // one-per-second tick rate, which is a fine render cadence for a shell this small.
+    private void OnUpdated() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Engine.Updated -= OnUpdated;
+}

@@ -1,0 +1,17 @@
+@page "/activity"
+@inject ActivityLog Log
+
+<PageTitle>Activity — ProPresenter Utilities</PageTitle>
+
+<div class="page-head">
+    <h1>Activity</h1>
+    <p>Every trigger fired and every command sent since the service started.</p>
+</div>
+
+<div class="card">
+    <div class="card-head">
+        <h2>Log</h2>
+        <button class="small" @onclick="() => Log.Clear()">Clear</button>
+    </div>
+    <ActivityFeed />
+</div>

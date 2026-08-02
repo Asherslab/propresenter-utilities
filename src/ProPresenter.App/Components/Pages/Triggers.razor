@@ -1,0 +1,606 @@
+@page "/triggers"
+@inject ConfigurationStore Config
+@inject TriggerEngine Engine
+@inject ProPresenterClient Client
+@inject LookupCache Lookups
+@inject UiActivity Activity
+@inject SignalBus Signals
+@implements IDisposable
+
+<PageTitle>Triggers — ProPresenter Utilities</PageTitle>
+
+<div class="page-head">
+    <h1>Triggers</h1>
+    <p>Rules live in profiles. One profile is active at a time; switch between them for different service types.</p>
+</div>
+
+<div class="card">
+    <div class="row">
+        <label style="margin: 0;">Editing profile</label>
+        <select value="@_editingProfileId" @onchange="ChangeEditingProfile">
+            @foreach (var profile in Configuration.Profiles)
+            {
+                <option value="@profile.Id">@profile.Name</option>
+            }
+        </select>
+
+        @if (Profile is not null && Profile.Id == Configuration.ActiveProfileId)
+        {
+            <span class="badge ok">Active</span>
+        }
+        else if (Profile is not null)
+        {
+            <button class="small" @onclick="MakeActive">Make active</button>
+        }
+
+        <span class="spacer"></span>
+
+        <button class="small" @onclick="AddProfile">New profile</button>
+        <button class="small" @onclick="DuplicateProfile" disabled="@(Profile is null)">Duplicate</button>
+        <button class="small danger" @onclick="DeleteProfile"
+                disabled="@(Profile is null || Configuration.Profiles.Count <= 1)">Delete profile</button>
+    </div>
+
+    @if (Profile is not null)
+    {
+        <div class="row" style="margin-top: 0.75rem;">
+            <div class="field" style="margin: 0; flex: 1;">
+                <label>Profile name</label>
+                <input value="@Profile.Name" @onchange="RenameProfile" style="width: 100%;" />
+            </div>
+            <div class="field" style="margin: 0; flex: 2;">
+                <label>Notes</label>
+                <input value="@Profile.Notes" @onchange="e => SetNotes(e)" style="width: 100%;"
+                       placeholder="What this profile is for" />
+            </div>
+        </div>
+    }
+</div>
+
+@if (Profile is null)
+{
+    <div class="card"><p class="empty">Select a profile to edit.</p></div>
+}
+else
+{
+    <div class="card-head">
+        <h2>@Profile.Rules.Count @(Profile.Rules.Count == 1 ? "rule" : "rules")</h2>
+        <button class="primary" @onclick="AddRule">+ Add trigger</button>
+    </div>
+
+    @if (Profile.Rules.Count == 0)
+    {
+        <div class="card">
+            <p class="empty">No triggers in this profile yet.</p>
+        </div>
+    }
+
+    @foreach (var rule in Profile.Rules)
+    {
+        var expanded = _expanded.Contains(rule.Id);
+
+        <div class="rule @(rule.Enabled ? "" : "disabled")" @key="rule.Id">
+            @* The whole bar toggles the detail panel — a small arrow was too fine a target. Child
+               controls stop propagation so they do not also collapse the row. *@
+            <div class="rule-head" role="button" tabindex="0" @ref="_rows[rule.Id]"
+                 @onclick="() => Toggle(rule.Id)"
+                 @onkeydown="e => OnRowKey(rule.Id, e)">
+
+                <span class="chevron">@(expanded ? "▾" : "▸")</span>
+
+                <input type="checkbox" checked="@rule.Enabled" title="Enable or disable this trigger"
+                       @onchange="e => SetEnabled(rule, e)" @onclick:stopPropagation="true" />
+
+                <span class="title">@rule.DisplayName</span>
+                <span class="badge @(rule.Source == TriggerSource.Signal ? "info" : "")">@rule.SourceDisplay</span>
+
+                @* Without a name the title already *is* the condition, so repeating it is noise. *@
+                @if (!string.IsNullOrWhiteSpace(rule.Name))
+                {
+                    <span class="timer-meta">@rule.ConditionDescription</span>
+                }
+
+                @if (rule.Source == TriggerSource.Timer && !TimerExists(rule))
+                {
+                    <span class="badge warn" title="No timer in ProPresenter matches this rule.">Timer missing</span>
+                }
+                else if (rule.Source == TriggerSource.Signal && string.IsNullOrWhiteSpace(rule.SignalKey))
+                {
+                    <span class="badge warn" title="This rule has no signal to listen for.">No signal</span>
+                }
+
+                @if (rule.Actions.Count == 0)
+                {
+                    <span class="badge warn">No actions</span>
+                }
+                else
+                {
+                    <span class="badge info">@rule.Actions.Count @(rule.Actions.Count == 1 ? "action" : "actions")</span>
+                }
+
+                <span class="spacer"></span>
+
+                <div class="row tight" @onclick:stopPropagation="true">
+                    <button class="small" @onclick="() => TestFire(rule)"
+                            title="Run this trigger's actions now, ignoring its condition">Test fire</button>
+                    <button class="small" @onclick="() => Duplicate(rule)">Duplicate</button>
+                    <button class="small danger" @onclick="() => DeleteRule(rule)">Delete</button>
+                </div>
+            </div>
+
+            @if (expanded)
+            {
+                <div class="rule-body">
+                    <div class="row" style="align-items: flex-end;">
+                        <div class="field" style="flex: 1; min-width: 12rem;">
+                            <label>Name (optional)</label>
+                            <input value="@rule.Name" placeholder="@rule.ConditionDescription" style="width: 100%;"
+                                   @onchange="e => SetName(rule, e)" />
+                        </div>
+
+                        <div class="field">
+                            <label>Triggered by</label>
+                            <select value="@rule.Source" @onchange="e => SetSource(rule, e)">
+                                <option value="@TriggerSource.Timer">A timer</option>
+                                <option value="@TriggerSource.Signal">A macro / signal</option>
+                            </select>
+                        </div>
+
+                        @if (rule.Source == TriggerSource.Timer)
+                        {
+                            <div class="field">
+                                <label>Timer</label>
+                                <select value="@(rule.Timer.Uuid ?? string.Empty)" @onchange="e => SetTimer(rule, e)">
+                                    <option value="">— choose a timer —</option>
+                                    @foreach (var option in TimerOptions)
+                                    {
+                                        <option value="@option.Uuid">@option.Name</option>
+                                    }
+                                    @if (rule.Timer.Uuid is { Length: > 0 } uuid && TimerOptions.All(t => t.Uuid != uuid))
+                                    {
+                                        <option value="@uuid">@rule.Timer.Display (not found)</option>
+                                    }
+                                </select>
+                            </div>
+
+                            <div class="field">
+                                <label>Fires</label>
+                                <select value="@rule.Kind" @onchange="e => SetKind(rule, e)">
+                                    <option value="@TriggerKind.OnStart">When the timer starts</option>
+                                    <option value="@TriggerKind.AtElapsed">At a time after the start</option>
+                                    <option value="@TriggerKind.AtRemaining">At a time before the end</option>
+                                    <option value="@TriggerKind.AtTimerValue">When the clock reaches a value</option>
+                                    <option value="@TriggerKind.OnEnd">When the timer ends</option>
+                                    <option value="@TriggerKind.OnStop">When the timer is stopped early</option>
+                                    <option value="@TriggerKind.OnOverran">When overrun finishes</option>
+                                    <option value="@TriggerKind.OnStateChange">When the timer enters a state</option>
+                                </select>
+                            </div>
+
+                            @if (rule.UsesOffset)
+                            {
+                                <div class="field">
+                                    <label>@OffsetLabel(rule.Kind)</label>
+                                    <DurationInput Value="rule.Offset" ValueChanged="v => SetOffset(rule, v)" />
+                                </div>
+                            }
+
+                            @if (rule.Kind == TriggerKind.OnStateChange)
+                            {
+                                <div class="field">
+                                    <label>State</label>
+                                    <select value="@rule.TargetState" @onchange="e => SetTargetState(rule, e)">
+                                        @foreach (var state in Enum.GetValues<TimerState>())
+                                        {
+                                            <option value="@state">@state.ToString().ToLowerInvariant()</option>
+                                        }
+                                    </select>
+                                </div>
+                            }
+                        }
+                        else
+                        {
+                            <div class="field" style="min-width: 12rem;">
+                                <label>Signal</label>
+                                <input value="@rule.SignalKey" placeholder="e.g. GPI 1"
+                                       @onchange="e => SetSignalKey(rule, e)" style="width: 100%;" />
+                            </div>
+
+                            <div class="field">
+                                <label>Delay (optional)</label>
+                                <DurationInput Value="rule.Offset" ValueChanged="v => SetOffset(rule, v)" />
+                            </div>
+                        }
+                    </div>
+
+                    @if (rule.Source == TriggerSource.Signal)
+                    {
+                        @* Learn mode: rather than knowing the RossTalk command a macro emits, run the
+                           macro and click the signal that arrives. *@
+                        <div class="row" style="margin: 0.5rem 0;">
+                            <span class="hint" style="margin: 0;">Recently seen:</span>
+                            @if (Signals.KnownKeys.Count == 0)
+                            {
+                                <span class="hint" style="margin: 0;">
+                                    nothing yet — run your macro, or check the <a href="signals">Signals</a> page.
+                                </span>
+                            }
+                            else
+                            {
+                                @foreach (var key in Signals.KnownKeys.Take(8))
+                                {
+                                    <button class="small @(rule.MatchesSignal(key) ? "primary" : "")"
+                                            title="@RossTalk.Describe(key)"
+                                            @onclick="() => UseSignal(rule, key)">@key</button>
+                                }
+                            }
+                        </div>
+                    }
+
+                    <div class="hint" style="margin-bottom: 0.75rem;">
+                        Fires <strong>@rule.ConditionDescription</strong>@(" ")
+                        @if (rule.Source == TriggerSource.Timer)
+                        {
+                            <span>on <strong>@rule.Timer.Display</strong>.</span>
+                            @if (rule.Kind == TriggerKind.AtRemaining)
+                            {
+                                <span>Timers with no defined end (an elapsed timer without an end time) never reach this point.</span>
+                            }
+                        }
+                        else
+                        {
+                            <span>
+                                — set up a RossTalk action in your ProPresenter macro, or call
+                                <span class="mono">/api/signals/&lt;name&gt;</span>.
+                                See the <a href="signals">Signals</a> page.
+                            </span>
+                        }
+                    </div>
+
+                    <h3>Actions</h3>
+                    <ActionEditor Actions="rule.Actions" Changed="Persist" />
+                </div>
+            }
+        </div>
+    }
+}
+
+@code {
+    /// <summary>Deep link from the dashboard: opens this rule's detail panel and scrolls to it.</summary>
+    [SupplyParameterFromQuery(Name = "rule")]
+    public Guid? FocusRuleId { get; set; }
+
+    /// <summary>Deep link from the Signals page: creates a rule already bound to this signal.</summary>
+    [SupplyParameterFromQuery(Name = "signal")]
+    public string? NewSignalKey { get; set; }
+
+    private bool _handledSignalLink;
+
+    private readonly HashSet<Guid> _expanded = [];
+    private readonly Dictionary<Guid, ElementReference> _rows = [];
+    private Guid? _editingProfileId;
+    private Guid? _pendingScrollTo;
+    private List<(string Uuid, string Name)> TimerOptions = [];
+
+    private AppConfiguration Configuration => Config.Current;
+
+    private TriggerProfile? Profile =>
+        Configuration.Profiles.FirstOrDefault(p => p.Id == _editingProfileId) ?? Configuration.ActiveProfile;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Activity.Touch();
+
+        // So a signal arriving while the editor is open shows up in the "recently seen" row.
+        Signals.Changed += OnSignals;
+
+        _editingProfileId = Configuration.ActiveProfileId;
+        await LoadTimersAsync();
+    }
+
+    private void OnSignals() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Signals.Changed -= OnSignals;
+
+    protected override void OnParametersSet()
+    {
+        // Arriving from "Attach a trigger" on the Signals page: start a rule bound to that signal.
+        // Guarded because OnParametersSet runs on every re-render and this creates a rule.
+        if (!_handledSignalLink && !string.IsNullOrWhiteSpace(NewSignalKey))
+        {
+            _handledSignalLink = true;
+            AddSignalRule(NewSignalKey!.Trim());
+            return;
+        }
+
+        if (FocusRuleId is not { } id) return;
+
+        // The rule may live in a profile other than the active one, so switch to whichever holds it.
+        var owner = Configuration.Profiles.FirstOrDefault(p => p.Rules.Any(r => r.Id == id));
+        if (owner is null) return;
+
+        _editingProfileId = owner.Id;
+        _expanded.Add(id);
+        _pendingScrollTo = id;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_pendingScrollTo is not { } id) return;
+        _pendingScrollTo = null;
+
+        if (!_rows.TryGetValue(id, out var row)) return;
+
+        try
+        {
+            // Focusing scrolls the row into view without needing any custom JavaScript.
+            await row.FocusAsync();
+        }
+        catch (Exception)
+        {
+            // The row may have been removed between render and this call.
+        }
+    }
+
+    private void OnRowKey(Guid id, KeyboardEventArgs e)
+    {
+        if (e.Key is "Enter" or " ") Toggle(id);
+    }
+
+    private async Task LoadTimersAsync()
+    {
+        // Prefer the live stream's view, falling back to a direct read when nothing has ticked yet.
+        var fromStream = Engine.Timers
+            .Where(t => t.Id.Uuid is { Length: > 0 })
+            .Select(t => (Uuid: t.Id.Uuid!, Name: t.Id.ToString()))
+            .ToList();
+
+        if (fromStream.Count > 0)
+        {
+            TimerOptions = fromStream;
+            return;
+        }
+
+        TimerOptions = (await Client.GetTimersAsync())
+            .Where(t => t.Id.Uuid is { Length: > 0 })
+            .Select(t => (Uuid: t.Id.Uuid!, Name: t.Id.ToString()))
+            .ToList();
+    }
+
+    private bool TimerExists(TriggerRule rule) =>
+        TimerOptions.Count == 0 || TimerOptions.Any(t => t.Uuid == rule.Timer.Uuid);
+
+    private static string OffsetLabel(TriggerKind kind) => kind switch
+    {
+        TriggerKind.AtElapsed => "Time after start",
+        TriggerKind.AtRemaining => "Time before end",
+        _ => "Clock value",
+    };
+
+    private void Toggle(Guid id)
+    {
+        if (!_expanded.Remove(id)) _expanded.Add(id);
+    }
+
+    private void Persist()
+    {
+        // Editing counts as activity, which keeps the ProPresenter lists refreshing quickly.
+        Activity.Touch();
+        Config.Save();
+    }
+
+    // ------------------------------------------------------------- profiles
+
+    private void ChangeEditingProfile(ChangeEventArgs e)
+    {
+        if (Guid.TryParse(e.Value?.ToString(), out var id)) _editingProfileId = id;
+    }
+
+    private void MakeActive()
+    {
+        if (Profile is null) return;
+        Config.Update(c => c with { ActiveProfileId = Profile.Id });
+    }
+
+    private void AddProfile()
+    {
+        var profile = new TriggerProfile { Name = $"Profile {Configuration.Profiles.Count + 1}" };
+        Config.Update(c =>
+        {
+            c.Profiles.Add(profile);
+            return c;
+        });
+        _editingProfileId = profile.Id;
+    }
+
+    private void DuplicateProfile()
+    {
+        if (Profile is null) return;
+
+        var copy = new TriggerProfile
+        {
+            Name = $"{Profile.Name} (copy)",
+            Notes = Profile.Notes,
+            Rules = Profile.Rules.Select(CloneRule).ToList(),
+        };
+
+        Config.Update(c =>
+        {
+            c.Profiles.Add(copy);
+            return c;
+        });
+        _editingProfileId = copy.Id;
+    }
+
+    private void DeleteProfile()
+    {
+        if (Profile is null || Configuration.Profiles.Count <= 1) return;
+
+        var target = Profile;
+        Config.Update(c =>
+        {
+            c.Profiles.Remove(target);
+            return c.ActiveProfileId == target.Id ? c with { ActiveProfileId = c.Profiles[0].Id } : c;
+        });
+        _editingProfileId = Configuration.Profiles[0].Id;
+    }
+
+    private void RenameProfile(ChangeEventArgs e)
+    {
+        if (Profile is null) return;
+        Profile.Name = e.Value?.ToString() ?? Profile.Name;
+        Persist();
+    }
+
+    private void SetNotes(ChangeEventArgs e)
+    {
+        if (Profile is null) return;
+        Profile.Notes = e.Value?.ToString() ?? string.Empty;
+        Persist();
+    }
+
+    // ---------------------------------------------------------------- rules
+
+    private void AddRule()
+    {
+        if (Profile is null) return;
+
+        var rule = new TriggerRule
+        {
+            Kind = TriggerKind.OnEnd,
+            // Pre-select the only timer when there is no ambiguity.
+            Timer = TimerOptions.Count == 1
+                ? new TimerRef { Uuid = TimerOptions[0].Uuid, Name = TimerOptions[0].Name }
+                : new TimerRef(),
+        };
+
+        Profile.Rules.Add(rule);
+        _expanded.Add(rule.Id);
+        Persist();
+    }
+
+    /// <summary>Creates a rule already listening for a signal, and opens it for editing.</summary>
+    private void AddSignalRule(string signalKey)
+    {
+        var profile = Profile;
+        if (profile is null) return;
+
+        // Reuse an existing rule for this signal rather than piling up duplicates when the button is
+        // pressed twice.
+        var existing = profile.Rules.FirstOrDefault(r => r.MatchesSignal(signalKey));
+        if (existing is not null)
+        {
+            _expanded.Add(existing.Id);
+            _pendingScrollTo = existing.Id;
+            return;
+        }
+
+        var rule = new TriggerRule
+        {
+            Source = TriggerSource.Signal,
+            SignalKey = signalKey,
+        };
+
+        profile.Rules.Add(rule);
+        _expanded.Add(rule.Id);
+        _pendingScrollTo = rule.Id;
+        Persist();
+    }
+
+    private static TriggerRule CloneRule(TriggerRule rule) => new()
+    {
+        Name = rule.Name,
+        Enabled = rule.Enabled,
+        Source = rule.Source,
+        SignalKey = rule.SignalKey,
+        Timer = new TimerRef { Uuid = rule.Timer.Uuid, Name = rule.Timer.Name },
+        Kind = rule.Kind,
+        Offset = rule.Offset,
+        TargetState = rule.TargetState,
+        Actions = rule.Actions
+            .Select(a => new ActionInvocation { ActionId = a.ActionId, Arguments = new(a.Arguments) })
+            .ToList(),
+    };
+
+    private void Duplicate(TriggerRule rule)
+    {
+        if (Profile is null) return;
+
+        var copy = CloneRule(rule);
+        copy.Name = string.IsNullOrWhiteSpace(rule.Name) ? string.Empty : $"{rule.Name} (copy)";
+        Profile.Rules.Insert(Profile.Rules.IndexOf(rule) + 1, copy);
+        Persist();
+    }
+
+    private void DeleteRule(TriggerRule rule)
+    {
+        Profile?.Rules.Remove(rule);
+        Persist();
+    }
+
+    private Task TestFire(TriggerRule rule) => Engine.TestFireAsync(rule);
+
+    private void SetEnabled(TriggerRule rule, ChangeEventArgs e)
+    {
+        rule.Enabled = e.Value is true;
+        Persist();
+    }
+
+    private void SetName(TriggerRule rule, ChangeEventArgs e)
+    {
+        rule.Name = e.Value?.ToString() ?? string.Empty;
+        Persist();
+    }
+
+    private void SetTimer(TriggerRule rule, ChangeEventArgs e)
+    {
+        var uuid = e.Value?.ToString() ?? string.Empty;
+        var match = TimerOptions.FirstOrDefault(t => t.Uuid == uuid);
+        rule.Timer = new TimerRef { Uuid = string.IsNullOrEmpty(uuid) ? null : uuid, Name = match.Name };
+        Persist();
+    }
+
+    private void SetKind(TriggerRule rule, ChangeEventArgs e)
+    {
+        if (Enum.TryParse<TriggerKind>(e.Value?.ToString(), out var kind)) rule.Kind = kind;
+        Persist();
+    }
+
+    private void SetSource(TriggerRule rule, ChangeEventArgs e)
+    {
+        if (!Enum.TryParse<TriggerSource>(e.Value?.ToString(), out var source)) return;
+        if (source == rule.Source) return;
+
+        rule.Source = source;
+
+        // Offset means "cue point" for a timer and "delay" for a signal, so carrying a value across
+        // would silently turn a 1-minute cue point into a 1-minute delay.
+        rule.Offset = TimeSpan.Zero;
+
+        Persist();
+    }
+
+    private void SetSignalKey(TriggerRule rule, ChangeEventArgs e)
+    {
+        rule.SignalKey = (e.Value?.ToString() ?? string.Empty).Trim();
+        Persist();
+    }
+
+    private void UseSignal(TriggerRule rule, string key)
+    {
+        rule.SignalKey = key;
+        Persist();
+    }
+
+    private void SetOffset(TriggerRule rule, TimeSpan value)
+    {
+        rule.Offset = value;
+        Persist();
+    }
+
+    private void SetTargetState(TriggerRule rule, ChangeEventArgs e)
+    {
+        if (Enum.TryParse<TimerState>(e.Value?.ToString(), out var state)) rule.TargetState = state;
+        Persist();
+    }
+}

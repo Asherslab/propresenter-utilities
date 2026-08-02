@@ -1,0 +1,177 @@
+@page "/settings"
+@inject ConfigurationStore Config
+@inject ProPresenterClient Client
+@inject TimerStream Stream
+@inject LookupCache Lookups
+@inject ActivityLog Log
+
+<PageTitle>Settings — ProPresenter Utilities</PageTitle>
+
+<div class="page-head">
+    <h1>Settings</h1>
+    <p>Where to find ProPresenter, and where this app keeps its configuration.</p>
+</div>
+
+<div class="card">
+    <h2>ProPresenter connection</h2>
+
+    <div class="row" style="align-items: flex-end;">
+        <div class="field">
+            <label>Host</label>
+            <input @bind="_host" placeholder="localhost" />
+        </div>
+        <div class="field">
+            <label>Port</label>
+            <input type="number" @bind="_port" />
+        </div>
+        <div class="field">
+            <button class="primary" @onclick="SaveConnection">Save and reconnect</button>
+        </div>
+        <div class="field">
+            <button @onclick="TestConnection">Test</button>
+        </div>
+    </div>
+
+    <div class="hint">
+        The port is the one set in ProPresenter under Preferences → Network. Enabling the network
+        link there is what exposes this API.
+    </div>
+
+    @if (_testResult is not null)
+    {
+        <div class="warning-banner" style="margin-top: 0.75rem; @(_testOk ? "border-color: rgba(56,184,124,0.4); background: rgba(56,184,124,0.12); color: var(--ok);" : "")">
+            @_testResult
+        </div>
+    }
+
+    <div style="margin-top: 0.75rem;">
+        <ConnectionBadge />
+        <span class="hint">
+            @if (Config.Current.Connection is { } c)
+            {
+                <span>Configured as @c.Host:@c.Port.</span>
+            }
+        </span>
+    </div>
+</div>
+
+<div class="card">
+    <h2>ProPresenter lists</h2>
+    <p class="hint">
+        Macros, playlists, looks and the rest are cached so the trigger editor stays responsive.
+        Refresh after adding new ones in ProPresenter.
+    </p>
+    <button @onclick="RefreshLookups">Refresh cached lists</button>
+</div>
+
+<div class="card">
+    <h2>Configuration file</h2>
+    <p class="mono" style="word-break: break-all;">@Config.FilePath</p>
+    <p class="hint">
+        Profiles and rules are stored here as JSON. Override the location with the
+        <span class="mono">PROPRESENTER_UTILITIES_CONFIG</span> environment variable.
+    </p>
+
+    <div class="row">
+        <button @onclick="Export">Export profiles</button>
+        <label class="btn" style="margin: 0;">
+            Import profiles
+            <InputFile OnChange="Import" style="display: none;" />
+        </label>
+    </div>
+
+    @if (_importMessage is not null)
+    {
+        <div class="warning-banner" style="margin-top: 0.75rem;">@_importMessage</div>
+    }
+</div>
+
+@if (_exported is not null)
+{
+    <div class="card">
+        <div class="card-head">
+            <h3>Exported configuration</h3>
+            <button class="link" @onclick="() => _exported = null">Close</button>
+        </div>
+        <p class="hint">Copy this into a file to back it up or move it to another machine.</p>
+        <textarea rows="18" readonly>@_exported</textarea>
+    </div>
+}
+
+<div class="card">
+    <h2>Security</h2>
+    <p class="hint">
+        Neither the ProPresenter API nor this UI requires a password. By default this app listens on
+        <span class="mono">127.0.0.1:8752</span> so it is reachable only from this machine. If you change
+        that to a network address, anyone who can reach the port can fire your cues.
+    </p>
+</div>
+
+@code {
+    private string _host = "localhost";
+    private int _port = 54937;
+    private string? _testResult;
+    private bool _testOk;
+    private string? _exported;
+    private string? _importMessage;
+
+    protected override void OnInitialized()
+    {
+        _host = Config.Current.Connection.Host;
+        _port = Config.Current.Connection.Port;
+    }
+
+    private void SaveConnection()
+    {
+        Config.Update(c => c with { Connection = new ConnectionSettings { Host = _host.Trim(), Port = _port } });
+        Stream.Reconnect();
+        _testResult = null;
+        Log.Info($"Connection settings changed to {_host}:{_port}");
+    }
+
+    private async Task TestConnection()
+    {
+        var version = await Client.GetVersionAsync();
+        _testOk = version is not null;
+        _testResult = version is null
+            ? $"No response from {Client.Endpoint.BaseUri.Authority}. Check the host, the port, and that ProPresenter's network link is enabled."
+            : $"Connected to {version.HostDescription} on {version.Name} ({version.Platform} {version.OsVersion}), API {version.ApiVersion}.";
+    }
+
+    private async Task RefreshLookups()
+    {
+        await Lookups.RefreshAllAsync();
+        Log.Info("Refreshed cached ProPresenter lists");
+    }
+
+    private void Export() =>
+        _exported = System.Text.Json.JsonSerializer.Serialize(Config.Current, ConfigurationStore.SerializerOptions);
+
+    private async Task Import(InputFileChangeEventArgs e)
+    {
+        _importMessage = null;
+        try
+        {
+            // 1 MB is far beyond any plausible profile file and keeps a stray upload from
+            // exhausting memory.
+            await using var stream = e.File.OpenReadStream(1024 * 1024);
+            var imported = await System.Text.Json.JsonSerializer.DeserializeAsync<AppConfiguration>(
+                stream, ConfigurationStore.SerializerOptions);
+
+            if (imported is null || imported.Profiles.Count == 0)
+            {
+                _importMessage = "That file did not contain any profiles.";
+                return;
+            }
+
+            // Keep the current connection: an imported file usually came from another machine.
+            Config.Replace(imported with { Connection = Config.Current.Connection });
+            _importMessage = $"Imported {imported.Profiles.Count} profile(s).";
+            Log.Success(_importMessage);
+        }
+        catch (Exception ex)
+        {
+            _importMessage = $"Could not import that file: {ex.Message}";
+        }
+    }
+}

@@ -1,0 +1,27 @@
+@inject TriggerEngine Engine
+
+<span class="badge @CssClass" title="@Title">@Text</span>
+
+@code {
+    private ConnectionStatus Status => Engine.ConnectionStatus;
+
+    private string CssClass => Status.State switch
+    {
+        ConnectionState.Connected => "ok",
+        ConnectionState.Connecting => "warn",
+        _ => "danger",
+    };
+
+    private string Text => Status.State switch
+    {
+        ConnectionState.Connected => "Connected",
+        ConnectionState.Connecting => "Connecting",
+        _ => "Disconnected",
+    };
+
+    private string Title => Status.LastError is { } error
+        ? $"{Text} — {error}"
+        : Status.LastUpdate is { } at
+            ? $"Last tick {at:HH:mm:ss}"
+            : Text;
+}

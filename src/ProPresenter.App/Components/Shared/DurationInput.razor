@@ -1,0 +1,34 @@
+@* Hours / minutes / seconds entry for a TimeSpan. Cue points are read off a run sheet in
+   minutes and seconds, so three small boxes beat asking an operator to type a timecode. *@
+
+<span class="duration">
+    <input type="number" min="0" max="99" value="@Hours" @onchange="OnHoursChanged" aria-label="Hours" />
+    <span>:</span>
+    <input type="number" min="0" max="59" value="@Minutes" @onchange="OnMinutesChanged" aria-label="Minutes" />
+    <span>:</span>
+    <input type="number" min="0" max="59" value="@Seconds" @onchange="OnSecondsChanged" aria-label="Seconds" />
+</span>
+
+@code {
+    [Parameter] public TimeSpan Value { get; set; }
+    [Parameter] public EventCallback<TimeSpan> ValueChanged { get; set; }
+
+    private int Hours => (int)Value.Duration().TotalHours;
+    private int Minutes => Value.Duration().Minutes;
+    private int Seconds => Value.Duration().Seconds;
+
+    private Task OnHoursChanged(ChangeEventArgs e) => Set(Parse(e, Hours), Minutes, Seconds);
+    private Task OnMinutesChanged(ChangeEventArgs e) => Set(Hours, Parse(e, Minutes), Seconds);
+    private Task OnSecondsChanged(ChangeEventArgs e) => Set(Hours, Minutes, Parse(e, Seconds));
+
+    private static int Parse(ChangeEventArgs e, int fallback) =>
+        int.TryParse(e.Value?.ToString(), out var parsed) && parsed >= 0 ? parsed : fallback;
+
+    private Task Set(int hours, int minutes, int seconds)
+    {
+        // Normalise overflow rather than rejecting it: typing 90 into minutes should mean 1:30:00.
+        var total = TimeSpan.FromSeconds((hours * 3600L) + (minutes * 60L) + seconds);
+        Value = total;
+        return ValueChanged.InvokeAsync(total);
+    }
+}

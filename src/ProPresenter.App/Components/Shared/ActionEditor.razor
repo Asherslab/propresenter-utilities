@@ -1,0 +1,261 @@
+@implements IDisposable
+@inject LookupCache Lookups
+
+@* Edits the ordered list of ProPresenter actions a trigger performs. *@
+
+@if (Actions.Count == 0)
+{
+    <p class="empty">No actions yet — this trigger would do nothing.</p>
+}
+
+@foreach (var action in Actions)
+{
+    var definition = ActionCatalog.Find(action.ActionId);
+    var index = Actions.IndexOf(action);
+
+    <div class="action-row">
+        @* The @ is required: for a string parameter Razor would otherwise pass the literal
+           text "action.ActionId" rather than evaluating it. *@
+        <ActionPicker Value="@action.ActionId" ValueChanged="id => ChangeAction(action, id)" />
+
+        @if (definition is null)
+        {
+            @if (!string.IsNullOrEmpty(action.ActionId))
+            {
+                <span class="badge danger" title="This action is not recognised. It may come from a newer version of the app.">Unknown</span>
+            }
+        }
+        else
+        {
+            <div class="action-params">
+                @foreach (var parameter in definition.Parameters)
+                {
+                    <div class="field">
+                        <label>@parameter.Label</label>
+                        @RenderParameter(action, parameter)
+                    </div>
+                }
+            </div>
+        }
+
+        <div class="row tight">
+            <button class="small" disabled="@(index == 0)" title="Move up"
+                    @onclick="() => Move(action, -1)">↑</button>
+            <button class="small" disabled="@(index == Actions.Count - 1)" title="Move down"
+                    @onclick="() => Move(action, 1)">↓</button>
+            <button class="small danger" title="Remove action" @onclick="() => Remove(action)">✕</button>
+        </div>
+    </div>
+
+    @if (definition is not null)
+    {
+        <div class="hint" style="margin: -0.25rem 0 0.5rem 0.5rem;">@definition.Description</div>
+    }
+}
+
+<button class="small" @onclick="Add">+ Add action</button>
+
+@code {
+    [Parameter, EditorRequired] public List<ActionInvocation> Actions { get; set; } = [];
+
+    /// <summary>Raised after any edit so the parent can persist the profile.</summary>
+    [Parameter] public EventCallback Changed { get; set; }
+
+    protected override void OnInitialized() => Lookups.Changed += OnLookupsChanged;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // Only load the lists the currently chosen actions actually need.
+        foreach (var kind in RequiredLookups()) await Lookups.EnsureLoadedAsync(kind);
+    }
+
+    private IEnumerable<ParameterKind> RequiredLookups() =>
+        Actions
+            .Select(a => ActionCatalog.Find(a.ActionId))
+            .Where(d => d is not null)
+            .SelectMany(d => d!.Parameters)
+            .Where(p => p.IsLookup)
+            .Select(p => p.Kind)
+            .Distinct();
+
+    private void OnLookupsChanged() => InvokeAsync(StateHasChanged);
+
+    private RenderFragment RenderParameter(ActionInvocation action, ActionParameter parameter) => builder =>
+    {
+        var value = action.Arguments.GetValueOrDefault(parameter.Key, parameter.Default ?? string.Empty);
+
+        switch (parameter.Kind)
+        {
+            case ParameterKind.Boolean:
+                builder.OpenElement(0, "input");
+                builder.AddAttribute(1, "type", "checkbox");
+                builder.AddAttribute(2, "checked", string.Equals(value, "true", StringComparison.OrdinalIgnoreCase));
+                builder.AddAttribute(3, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(
+                    this, e => SetArgument(action, parameter.Key, e.Value is true ? "true" : "false")));
+                builder.CloseElement();
+                break;
+
+            case ParameterKind.Choice:
+                builder.OpenElement(0, "select");
+                builder.AddAttribute(1, "value", value);
+                builder.AddAttribute(2, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(
+                    this, e => SetArgument(action, parameter.Key, e.Value?.ToString() ?? string.Empty)));
+                foreach (var choice in parameter.Choices ?? [])
+                {
+                    builder.OpenElement(3, "option");
+                    builder.SetKey(choice);
+                    builder.AddAttribute(4, "value", choice);
+                    builder.AddContent(5, choice);
+                    builder.CloseElement();
+                }
+                builder.CloseElement();
+                break;
+
+            case ParameterKind.Json:
+                builder.OpenElement(0, "textarea");
+                builder.AddAttribute(1, "rows", 3);
+                builder.AddAttribute(2, "style", "min-width: 22rem;");
+                builder.AddAttribute(3, "value", value);
+                builder.AddAttribute(4, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(
+                    this, e => SetArgument(action, parameter.Key, e.Value?.ToString() ?? string.Empty)));
+                builder.CloseElement();
+                break;
+
+            case ParameterKind.Integer:
+            case ParameterKind.Seconds:
+                builder.OpenElement(0, "input");
+                builder.AddAttribute(1, "type", "number");
+                builder.AddAttribute(2, "value", value);
+                builder.AddAttribute(3, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(
+                    this, e => SetArgument(action, parameter.Key, e.Value?.ToString() ?? "0")));
+                builder.CloseElement();
+                break;
+
+            case ParameterKind.Text:
+                builder.OpenElement(0, "input");
+                builder.AddAttribute(1, "type", "text");
+                builder.AddAttribute(2, "value", value);
+                builder.AddAttribute(3, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(
+                    this, e => SetArgument(action, parameter.Key, e.Value?.ToString() ?? string.Empty)));
+                builder.CloseElement();
+                break;
+
+            default:
+                RenderLookup(builder, action, parameter, value);
+                break;
+        }
+
+        if (!string.IsNullOrWhiteSpace(parameter.Help))
+        {
+            builder.OpenElement(90, "div");
+            builder.AddAttribute(91, "class", "hint");
+            builder.AddContent(92, parameter.Help);
+            builder.CloseElement();
+        }
+    };
+
+    private void RenderLookup(
+        Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder,
+        ActionInvocation action,
+        ActionParameter parameter,
+        string value)
+    {
+        var options = Lookups.Get(parameter.Kind);
+
+        // With nothing to pick from — ProPresenter unreachable, or genuinely none defined — fall back
+        // to a text box so a rule can still be written offline.
+        if (options.Count == 0)
+        {
+            builder.OpenElement(0, "input");
+            builder.AddAttribute(1, "type", "text");
+            builder.AddAttribute(2, "value", value);
+            builder.AddAttribute(3, "placeholder", "name, index or UUID");
+            builder.AddAttribute(4, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(
+                this, e => SetArgument(action, parameter.Key, e.Value?.ToString() ?? string.Empty)));
+            builder.CloseElement();
+
+            builder.OpenElement(5, "div");
+            builder.AddAttribute(6, "class", "hint");
+            builder.AddContent(7, Lookups.IsLoaded(parameter.Kind)
+                ? "None found in ProPresenter — enter one manually."
+                : "Loading…");
+            builder.CloseElement();
+            return;
+        }
+
+        builder.OpenElement(10, "select");
+        builder.AddAttribute(11, "value", value);
+        builder.AddAttribute(12, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(
+            this, e => SetArgument(action, parameter.Key, e.Value?.ToString() ?? string.Empty)));
+
+        builder.OpenElement(13, "option");
+        builder.AddAttribute(14, "value", string.Empty);
+        builder.AddContent(15, "— choose —");
+        builder.CloseElement();
+
+        foreach (var option in options)
+        {
+            builder.OpenElement(16, "option");
+            builder.SetKey(option.Value);
+            builder.AddAttribute(17, "value", option.Value);
+            builder.AddContent(18, option.Label);
+            builder.CloseElement();
+        }
+
+        // A value saved earlier can refer to something since deleted; keep it visible rather than
+        // silently resetting the rule to the first item in the list.
+        if (!string.IsNullOrEmpty(value) && options.All(o => o.Value != value))
+        {
+            builder.OpenElement(19, "option");
+            builder.AddAttribute(20, "value", value);
+            builder.AddContent(21, $"{value} (not found)");
+            builder.CloseElement();
+        }
+
+        builder.CloseElement();
+    }
+
+    private Task SetArgument(ActionInvocation action, string key, string value)
+    {
+        action.Arguments[key] = value;
+        return Changed.InvokeAsync();
+    }
+
+    private async Task ChangeAction(ActionInvocation action, string id)
+    {
+        action.ActionId = id;
+
+        // Arguments belong to the previous action's parameters; start clean with the new defaults.
+        action.Arguments = ActionCatalog.Find(id) is { } definition
+            ? ActionInvocation.ForAction(definition).Arguments
+            : [];
+
+        foreach (var kind in RequiredLookups()) await Lookups.EnsureLoadedAsync(kind);
+        await Changed.InvokeAsync();
+    }
+
+    private Task Add()
+    {
+        Actions.Add(new ActionInvocation());
+        return Changed.InvokeAsync();
+    }
+
+    private Task Remove(ActionInvocation action)
+    {
+        Actions.Remove(action);
+        return Changed.InvokeAsync();
+    }
+
+    private Task Move(ActionInvocation action, int delta)
+    {
+        var index = Actions.IndexOf(action);
+        var target = index + delta;
+        if (index < 0 || target < 0 || target >= Actions.Count) return Task.CompletedTask;
+
+        Actions.RemoveAt(index);
+        Actions.Insert(target, action);
+        return Changed.InvokeAsync();
+    }
+
+    public void Dispose() => Lookups.Changed -= OnLookupsChanged;
+}

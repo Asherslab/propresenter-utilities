@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd agent for ProPresenter Utilities.
+
+  Install to ~/Library/LaunchAgents/ and edit the three paths below:
+    * ProgramArguments[0]      - the published executable
+    * PROPRESENTER_UTILITIES_CONFIG - where profiles and rules are stored
+    * the two log paths
+
+  A LaunchAgent (not a LaunchDaemon) is correct here: it runs as the booth user, in the same login
+  session as ProPresenter, and starts when that user logs in.
+
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.propresenter.utilities.plist
+    launchctl kickstart -p gui/$(id -u)/com.propresenter.utilities
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.propresenter.utilities</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/propresenter-utilities/ProPresenter.App</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- Loopback only: neither this UI nor the ProPresenter API is authenticated. -->
+        <key>PROPRESENTER_UTILITIES_URLS</key>
+        <string>http://127.0.0.1:8752</string>
+
+        <!-- Absolute path, so the file is found regardless of the launch environment. -->
+        <key>PROPRESENTER_UTILITIES_CONFIG</key>
+        <string>/Users/CHANGEME/.config/propresenter-utilities/config.json</string>
+
+        <key>DOTNET_NOLOGO</key>
+        <string>1</string>
+    </dict>
+
+    <!-- Start at login and restart if the process exits for any reason. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Do not respawn faster than this if it is crash-looping. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/CHANGEME/Library/Logs/propresenter-utilities.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/CHANGEME/Library/Logs/propresenter-utilities.log</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>

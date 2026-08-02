@@ -1,0 +1,420 @@
+@page "/timers"
+@implements IDisposable
+@inject ProPresenterClient Client
+@inject TriggerEngine Engine
+@inject ConfigurationStore Config
+@inject ActivityLog Log
+@inject UiActivity Activity
+
+<PageTitle>Timers — ProPresenter Utilities</PageTitle>
+
+<div class="page-head">
+    <h1>Timers</h1>
+    <p>ProPresenter's timers. Changes here are written straight to ProPresenter.</p>
+</div>
+
+@if (_error is not null && _form is null)
+{
+    <div class="warning-banner">
+        @_error
+        <button class="link" style="margin-left: 0.5rem;" @onclick="() => _error = null">dismiss</button>
+    </div>
+}
+
+<div class="card">
+    <div class="card-head">
+        <h2>Configured timers</h2>
+        <div class="row">
+            <button class="small" @onclick="Refresh">Refresh</button>
+            <button class="primary small" @onclick="StartNew">+ New timer</button>
+        </div>
+    </div>
+
+    @if (VisibleTimers.Count == 0)
+    {
+        <p class="empty">No timers configured in ProPresenter.</p>
+    }
+    else
+    {
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Type</th>
+                    <th>Configuration</th>
+                    <th>Overrun</th>
+                    <th>Now</th>
+                    <th>Rules</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var timer in VisibleTimers)
+                {
+                    var live = Engine.Timers.FirstOrDefault(t => t.Id.Uuid == timer.Id.Uuid);
+
+                    <tr @key="timer.Id.Uuid">
+                        <td><strong>@timer.Id</strong></td>
+                        <td>@KindLabel(timer.Kind)</td>
+                        <td class="mono">@ConfigurationSummary(timer)</td>
+                        <td>@(timer.AllowsOverrun ? "Yes" : "No")</td>
+                        <td class="mono">
+                            @if (live is not null)
+                            {
+                                <span>@TimeCode.Format(live.Observation.Value)</span>
+                                <span class="badge @StateBadge(live.Observation.State)">
+                                    @live.Observation.State.ToString().ToLowerInvariant()
+                                </span>
+                            }
+                            else
+                            {
+                                <span class="timer-meta">—</span>
+                            }
+                        </td>
+                        <td>@RuleCount(timer)</td>
+                        <td>
+                            <div class="row tight">
+                                <button class="small" @onclick="() => Operate(timer, TimerOperation.Start)">Start</button>
+                                <button class="small" @onclick="() => Operate(timer, TimerOperation.Stop)">Stop</button>
+                                <button class="small" @onclick="() => Operate(timer, TimerOperation.Reset)">Reset</button>
+                                <button class="small" @onclick="() => Edit(timer)">Edit</button>
+                                <button class="small danger" @onclick="() => Delete(timer)">Delete</button>
+                            </div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</div>
+
+@if (_form is not null)
+{
+    <div class="card">
+        <div class="card-head">
+            <h2>@(_editingUuid is null ? "New timer" : $"Edit “{_form.Name}”")</h2>
+            <button class="link" @onclick="Cancel">Cancel</button>
+        </div>
+
+        <div class="row" style="align-items: flex-end;">
+            <div class="field" style="flex: 1; min-width: 12rem;">
+                <label>Name</label>
+                <input @bind="_form.Name" @bind:event="oninput" style="width: 100%;" />
+            </div>
+
+            <div class="field">
+                <label>Type</label>
+                <select value="@_form.Kind" @onchange="ChangeKind">
+                    <option value="@TimerKind.Countdown">Countdown</option>
+                    <option value="@TimerKind.CountDownToTime">Countdown to time of day</option>
+                    <option value="@TimerKind.Elapsed">Elapsed</option>
+                </select>
+            </div>
+
+            <div class="field">
+                <label class="switch">
+                    <input type="checkbox" @bind="_form.AllowsOverrun" />
+                    <span>Allow overrun</span>
+                </label>
+            </div>
+        </div>
+
+        @switch (_form.Kind)
+        {
+            case TimerKind.Countdown:
+                <div class="field">
+                    <label>Duration</label>
+                    <DurationInput Value="_form.Duration" ValueChanged="v => _form.Duration = v" />
+                </div>
+                break;
+
+            case TimerKind.CountDownToTime:
+                <div class="row" style="align-items: flex-end;">
+                    <div class="field">
+                        <label>Time of day</label>
+                        <DurationInput Value="_form.TimeOfDay" ValueChanged="v => _form.TimeOfDay = v" />
+                    </div>
+                    <div class="field">
+                        <label>Period</label>
+                        <select @bind="_form.Period">
+                            <option value="am">AM</option>
+                            <option value="pm">PM</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="hint">
+                    Enter the hour on a 12-hour clock — 5:00:00 with PM counts down to 5&nbsp;pm.
+                </div>
+                break;
+
+            case TimerKind.Elapsed:
+                <div class="row" style="align-items: flex-end;">
+                    <div class="field">
+                        <label>Start at</label>
+                        <DurationInput Value="_form.StartTime" ValueChanged="v => _form.StartTime = v" />
+                    </div>
+                    <div class="field">
+                        <label>End at</label>
+                        <DurationInput Value="_form.EndTime" ValueChanged="v => _form.EndTime = v" />
+                    </div>
+                </div>
+                <div class="hint">
+                    Leave the end at 00:00:00 for an open-ended timer. Without an end time,
+                    "time before the end" rules can never fire.
+                </div>
+                break;
+        }
+
+        <div class="row" style="margin-top: 0.75rem;">
+            <button class="primary" @onclick="SaveTimer" disabled="@string.IsNullOrWhiteSpace(_form.Name)">
+                @(_editingUuid is null ? "Create timer" : "Save changes")
+            </button>
+            <button @onclick="Cancel">Cancel</button>
+        </div>
+
+        @if (_error is not null)
+        {
+            <div class="warning-banner" style="margin-top: 0.75rem;">@_error</div>
+        }
+    </div>
+}
+
+@code {
+    private List<TimerConfiguration> _timers = [];
+
+    /// <summary>
+    /// UUIDs deleted in this session, hidden from the table until ProPresenter's list catches up.
+    /// </summary>
+    private readonly HashSet<string> _deleted = new(StringComparer.OrdinalIgnoreCase);
+
+    private TimerForm? _form;
+    private string? _editingUuid;
+    private string? _error;
+
+    /// <summary>Timers to render: what ProPresenter reports, minus anything just deleted here.</summary>
+    private List<TimerConfiguration> VisibleTimers =>
+        _timers.Where(t => t.Id.Uuid is null || !_deleted.Contains(t.Id.Uuid)).ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Activity.Touch();
+        Engine.Updated += OnUpdated;
+        await Refresh();
+    }
+
+    private void OnUpdated() => InvokeAsync(StateHasChanged);
+
+    private async Task Refresh()
+    {
+        _timers = (await Client.GetTimersAsync()).ToList();
+        await Engine.RefreshTimerConfigurationsAsync();
+    }
+
+    /// <summary>
+    /// Refreshes until the list reflects a change just made.
+    /// </summary>
+    /// <remarks>
+    /// ProPresenter's <c>/v1/timers</c> list lags a create, edit or delete by a moment even though the
+    /// request has already succeeded, so reading once shows stale data. Retry briefly, then give up
+    /// and show whatever the last read returned rather than blocking the UI.
+    /// </remarks>
+    private async Task RefreshUntilAsync(Func<List<TimerConfiguration>, bool> settled)
+    {
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            await Refresh();
+            if (settled(_timers)) return;
+            await Task.Delay(150);
+        }
+    }
+
+    private int RuleCount(TimerConfiguration timer) =>
+        Config.Current.ActiveProfile?.Rules.Count(r => r.Timer.Matches(timer.Id)) ?? 0;
+
+    private static string KindLabel(TimerKind kind) => kind switch
+    {
+        TimerKind.Countdown => "Countdown",
+        TimerKind.CountDownToTime => "To time of day",
+        TimerKind.Elapsed => "Elapsed",
+        _ => "Unknown",
+    };
+
+    private static string StateBadge(TimerState state) => state switch
+    {
+        TimerState.Running => "ok",
+        TimerState.Overrunning or TimerState.Overran => "danger",
+        TimerState.Complete => "info",
+        _ => "",
+    };
+
+    private static string ConfigurationSummary(TimerConfiguration timer) => timer.Kind switch
+    {
+        TimerKind.Countdown => TimeCode.Format(TimeSpan.FromSeconds(timer.Countdown!.Duration)),
+        TimerKind.CountDownToTime =>
+            $"{TimeCode.Format(TimeSpan.FromSeconds(timer.CountDownToTime!.TimeOfDay))} {timer.CountDownToTime.Period?.ToUpperInvariant()}",
+        TimerKind.Elapsed =>
+            $"{TimeCode.Format(TimeSpan.FromSeconds(timer.Elapsed!.StartTime))} → " +
+            (timer.Elapsed.EndTime is > 0
+                ? TimeCode.Format(TimeSpan.FromSeconds(timer.Elapsed.EndTime.Value))
+                : "open ended"),
+        _ => "—",
+    };
+
+    private Task Operate(TimerConfiguration timer, TimerOperation operation) =>
+        Client.TimerOperationAsync(timer.Id.ToRouteValue(), operation);
+
+    private void StartNew()
+    {
+        _editingUuid = null;
+        _error = null;
+        _form = new TimerForm { Name = "New timer", Kind = TimerKind.Countdown, Duration = TimeSpan.FromMinutes(5) };
+    }
+
+    private void Edit(TimerConfiguration timer)
+    {
+        _editingUuid = timer.Id.Uuid;
+        _error = null;
+        _form = TimerForm.From(timer);
+    }
+
+    private void Cancel()
+    {
+        _form = null;
+        _editingUuid = null;
+        _error = null;
+    }
+
+    private void ChangeKind(ChangeEventArgs e)
+    {
+        if (_form is not null && Enum.TryParse<TimerKind>(e.Value?.ToString(), out var kind)) _form.Kind = kind;
+    }
+
+    private async Task SaveTimer()
+    {
+        if (_form is null) return;
+        _error = null;
+
+        var result = _editingUuid is null
+            ? await Client.CreateTimerAsync(_form.ToCreateBody())
+            : await Client.UpdateTimerAsync(_editingUuid, _form.ToUpdateBody(_editingUuid));
+
+        if (!result.Success)
+        {
+            _error = $"ProPresenter rejected the change: {result.Error}";
+            Log.Error($"Could not save timer '{_form.Name}'", result.Error);
+            return;
+        }
+
+        Log.Success($"Saved timer '{_form.Name}'");
+
+        var name = _form.Name.Trim();
+        var edited = _editingUuid;
+        var expectedCount = edited is null ? _timers.Count + 1 : _timers.Count;
+
+        Cancel();
+
+        await RefreshUntilAsync(timers => edited is null
+            ? timers.Count == expectedCount && timers.Any(t => t.Id.Name == name)
+            : timers.Any(t => t.Id.Uuid == edited && t.Id.Name == name));
+    }
+
+    private async Task Delete(TimerConfiguration timer)
+    {
+        var uuid = timer.Id.Uuid;
+
+        // Hide the row immediately. ProPresenter keeps reporting a deleted timer in /v1/timers for a
+        // while, so waiting for the list to agree makes the button feel broken.
+        if (uuid is not null) _deleted.Add(uuid);
+        StateHasChanged();
+
+        var result = await Client.DeleteTimerAsync(timer.Id.ToRouteValue());
+        if (result.Success)
+        {
+            Log.Info($"Deleted timer '{timer.Id}'");
+        }
+        else
+        {
+            // Put it back: it is still there, and pretending otherwise would be worse.
+            if (uuid is not null) _deleted.Remove(uuid);
+            Log.Error($"Could not delete timer '{timer.Id}'", result.Error);
+            _error = $"ProPresenter would not delete '{timer.Id}': {result.Error}";
+        }
+
+        await RefreshUntilAsync(timers => !result.Success || timers.All(t => t.Id.Uuid != uuid));
+    }
+
+    public void Dispose() => Engine.Updated -= OnUpdated;
+
+    /// <summary>Editable shape of a timer, converted to the API's request bodies on save.</summary>
+    private sealed class TimerForm
+    {
+        public string Name { get; set; } = string.Empty;
+        public TimerKind Kind { get; set; } = TimerKind.Countdown;
+        public bool AllowsOverrun { get; set; }
+        public TimeSpan Duration { get; set; } = TimeSpan.FromMinutes(5);
+        public TimeSpan TimeOfDay { get; set; } = TimeSpan.FromHours(5);
+        public string Period { get; set; } = "pm";
+        public TimeSpan StartTime { get; set; }
+        public TimeSpan EndTime { get; set; }
+
+        public static TimerForm From(TimerConfiguration timer) => new()
+        {
+            Name = timer.Id.Name ?? string.Empty,
+            Kind = timer.Kind,
+            AllowsOverrun = timer.AllowsOverrun,
+            Duration = TimeSpan.FromSeconds(timer.Countdown?.Duration ?? 300),
+            TimeOfDay = TimeSpan.FromSeconds(timer.CountDownToTime?.TimeOfDay ?? 18000),
+            Period = timer.CountDownToTime?.Period ?? "pm",
+            StartTime = TimeSpan.FromSeconds(timer.Elapsed?.StartTime ?? 0),
+            EndTime = TimeSpan.FromSeconds(timer.Elapsed?.EndTime ?? 0),
+        };
+
+        public Dictionary<string, object?> ToCreateBody()
+        {
+            var body = Payload();
+            body["name"] = Name;
+            return body;
+        }
+
+        public Dictionary<string, object?> ToUpdateBody(string uuid)
+        {
+            var body = Payload();
+            // Updates address the timer by id; setting the name here is also how a timer is renamed.
+            body["id"] = new Dictionary<string, object?> { ["uuid"] = uuid, ["name"] = Name };
+            return body;
+        }
+
+        private Dictionary<string, object?> Payload()
+        {
+            var body = new Dictionary<string, object?> { ["allows_overrun"] = AllowsOverrun };
+
+            switch (Kind)
+            {
+                case TimerKind.Countdown:
+                    body["countdown"] = new Dictionary<string, object?>
+                    {
+                        ["duration"] = (int)Duration.TotalSeconds,
+                    };
+                    break;
+
+                case TimerKind.CountDownToTime:
+                    body["count_down_to_time"] = new Dictionary<string, object?>
+                    {
+                        ["time_of_day"] = (int)TimeOfDay.TotalSeconds,
+                        ["period"] = Period,
+                    };
+                    break;
+
+                case TimerKind.Elapsed:
+                    body["elapsed"] = new Dictionary<string, object?>
+                    {
+                        ["start_time"] = (int)StartTime.TotalSeconds,
+                        ["end_time"] = (int)EndTime.TotalSeconds,
+                    };
+                    break;
+            }
+
+            return body;
+        }
+    }
+}
