@@ -1,0 +1,88 @@
+# Builds self-contained packages and publishes them as a GitHub release when a version tag is pushed:
+#
+#   git tag v1.2.0 && git push origin v1.2.0
+#
+# Asset names carry no version, so install.sh can always fetch releases/latest/download/<name>.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet test -c Release
+
+  publish:
+    needs: test
+    strategy:
+      matrix:
+        include:
+          # macOS builds run on macOS so the SDK ad-hoc signs the executable; unsigned arm64 binaries
+          # are killed on launch.
+          - { rid: osx-arm64, os: macos-latest, archive: tar }
+          - { rid: osx-x64, os: macos-latest, archive: tar }
+          - { rid: linux-x64, os: ubuntu-latest, archive: tar }
+          - { rid: linux-arm64, os: ubuntu-latest, archive: tar }
+          - { rid: win-x64, os: ubuntu-latest, archive: zip }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          dotnet publish src/ProPresenter.App -c Release -r ${{ matrix.rid }} --self-contained \
+            -p:Version="$version" -o out/propresenter-utilities
+          echo "$GITHUB_REF_NAME" > out/propresenter-utilities/VERSION
+
+      - name: Archive
+        shell: bash
+        working-directory: out
+        run: |
+          if [ "${{ matrix.archive }}" = zip ]; then
+            zip -qr propresenter-utilities-${{ matrix.rid }}.zip propresenter-utilities
+          else
+            # No AppleDouble (._*) files in archives made on macOS.
+            COPYFILE_DISABLE=1 tar -czf propresenter-utilities-${{ matrix.rid }}.tar.gz propresenter-utilities
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.rid }}
+          path: out/propresenter-utilities-${{ matrix.rid }}.*
+          if-no-files-found: error
+
+  release:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum propresenter-utilities-* > SHA256SUMS
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes \
+            $([[ "$GITHUB_REF_NAME" == *-* ]] && echo --prerelease)

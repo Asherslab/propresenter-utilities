@@ -3,6 +3,8 @@
 This app is an ordinary ASP.NET Core process. It integrates with the Windows service manager and
 systemd automatically, and runs happily under launchd on macOS. One build works for all three.
 
+- [Quick install (macOS and Linux)](#quick-install-macos-and-linux)
+- [Publishing a release](#publishing-a-release)
 - [Prerequisites](#prerequisites)
 - [Building](#building)
 - [Configuration](#configuration)
@@ -12,6 +14,69 @@ systemd automatically, and runs happily under launchd on macOS. One build works 
 - [Network exposure](#network-exposure)
 - [Upgrading and uninstalling](#upgrading-and-uninstalling)
 - [Troubleshooting](#troubleshooting)
+
+## Quick install (macOS and Linux)
+
+On the machine that runs ProPresenter, as the booth user (not with `sudo`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Asherslab/propresenter-utilities/main/install.sh | bash
+```
+
+That downloads the latest [release](https://github.com/Asherslab/propresenter-utilities/releases) for
+this machine, checks its SHA-256, and runs it as a per-user service: a LaunchAgent on macOS, a systemd
+user unit on Linux. No .NET install is needed; release builds are self-contained. Then open
+<http://127.0.0.1:8752>.
+
+**To update, run the same command again.** It does nothing if the latest version is already installed.
+Otherwise it stops the service, switches to the new version and checks that the control panel
+answers. If it doesn't, it puts the previous version back.
+
+| | macOS | Linux |
+| --- | --- | --- |
+| App | `~/Applications/propresenter-utilities` | `~/.local/share/propresenter-utilities` |
+| Service | `~/Library/LaunchAgents/com.propresenter.utilities.plist` | `~/.config/systemd/user/propresenter-utilities.service` |
+| Logs | `~/Library/Logs/propresenter-utilities.log` | `journalctl --user -u propresenter-utilities` |
+| Config | `~/.config/propresenter-utilities/config.json` | same |
+
+Options go after `bash -s --`, for example `curl -fsSL … | bash -s -- --urls http://0.0.0.0:8752`:
+
+| Option | Meaning |
+| --- | --- |
+| `--version v1.2.0` | Install a specific release, e.g. to roll back |
+| `--force` | Reinstall even if that version is already installed |
+| `--urls URL` | Address the control panel listens on (see [Network exposure](#network-exposure)) |
+| `--config PATH` | Configuration file location |
+| `--dir PATH` | Install directory |
+| `--uninstall` | Remove the service and the app. The configuration file is kept |
+
+An update keeps the `--urls` and `--config` values the existing LaunchAgent was installed with, so
+they only need passing once.
+
+The installer manages the service label `com.propresenter.utilities`. If you previously installed by
+hand with that label, it takes the install over, keeping its URLs and config path. If something else
+is already serving the control panel's port (an older manual install under a different name, or the
+app running from an IDE), the installer stops and says so rather than starting a second copy.
+
+On Linux, a user service only runs while you're logged in unless lingering is on:
+`sudo loginctl enable-linger $USER`. On Windows, download the `win-x64` zip from the releases page
+and use [the service script](#windows--service).
+
+## Publishing a release
+
+Releases are built by GitHub Actions (`.github/workflows/release.yml`) when a version tag is pushed:
+
+```bash
+git tag v1.2.0
+git push origin v1.2.0
+```
+
+The workflow runs the tests, then publishes self-contained builds for `osx-arm64`, `osx-x64`,
+`linux-x64`, `linux-arm64` and `win-x64`, and creates the release with a `SHA256SUMS` file and notes
+generated from the commits. A tag with a suffix, such as `v1.2.0-rc.1`, becomes a pre-release, which
+the installer's "latest" skips. Install it with `--version`.
+
+Every push and pull request also runs the build and tests (`.github/workflows/ci.yml`).
 
 ## Prerequisites
 
@@ -202,7 +267,8 @@ rule to the specific devices that need it. There is no authentication to fall ba
 
 ## Upgrading and uninstalling
 
-Upgrading is a file replacement: stop the service, publish over the install directory, start it again.
+With the quick installer, re-run it to upgrade, or pass `--uninstall`; see
+[Quick install](#quick-install-macos-and-linux). For a manual install, upgrading is a file replacement: stop the service, publish over the install directory, start it again.
 The config file lives outside the install directory and is untouched.
 
 Uninstalling leaves your profiles behind; delete the config file too if you want them gone. Nothing is

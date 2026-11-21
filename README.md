@@ -32,7 +32,16 @@ That is three triggers on one timer:
 
 ## Quick start
 
-Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download) to build.
+To install on the ProPresenter machine (macOS or Linux), or to update an existing install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Asherslab/propresenter-utilities/main/install.sh | bash
+```
+
+Then open <http://127.0.0.1:8752>. See [docs/INSTALL.md](docs/INSTALL.md#quick-install-macos-and-linux)
+for options, and for how releases are published.
+
+To run from source instead, you need the [.NET 10 SDK](https://dotnet.microsoft.com/download).
 
 1. In ProPresenter, open **Preferences → Network**, enable the network link, and note the port
    (54937 by default).

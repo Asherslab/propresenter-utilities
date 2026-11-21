@@ -19,6 +19,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- ProPresenter's published OpenAPI document; the catalog tests validate every action against it. -->
+    <None Include="swagger.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\ProPresenter.Triggers\ProPresenter.Triggers.csproj" />
     <ProjectReference Include="..\..\src\ProPresenter.Api\ProPresenter.Api.csproj" />
   </ItemGroup>
