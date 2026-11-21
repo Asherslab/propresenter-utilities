@@ -104,7 +104,7 @@ PB=/usr/libexec/PlistBuddy
 # control panel or points the service at a different configuration file. Reads the environment and
 # any --urls/--config arguments; values already set (from flags, or an earlier plist) are kept.
 read_settings_from() {
-    local plist="$1" i=0 arg next
+    local plist="$1" i=0 arg next appdir=""
     [ -n "$URLS" ] || URLS="$($PB -c 'Print :EnvironmentVariables:PROPRESENTER_UTILITIES_URLS' "$plist" 2>/dev/null || true)"
     [ -n "$CONFIG" ] || CONFIG="$($PB -c 'Print :EnvironmentVariables:PROPRESENTER_UTILITIES_CONFIG' "$plist" 2>/dev/null || true)"
     while arg="$($PB -c "Print :ProgramArguments:$i" "$plist" 2>/dev/null)"; do
@@ -115,8 +115,30 @@ read_settings_from() {
             --config) [ -n "$CONFIG" ] || CONFIG="$next" ;;
             --config=*) [ -n "$CONFIG" ] || CONFIG="${arg#--config=}" ;;
         esac
+        case "$arg" in
+            */ProPresenter.App | */ProPresenter.App.dll) appdir="${arg%/*}" ;;
+        esac
         i=$((i + 1))
     done
+
+    # Lowest precedence, as in the app itself: appsettings.json, then the Production override, in the
+    # folder the app runs from (its content root is the executable's directory, not WorkingDirectory).
+    if [ -n "$appdir" ]; then
+        local file value
+        for file in "$appdir/appsettings.Production.json" "$appdir/appsettings.json"; do
+            [ -f "$file" ] || continue
+            value="$(json_string "$file" Urls)"
+            [ -n "$URLS" ] || URLS="$value"
+            value="$(json_string "$file" Config)"
+            [ -n "$CONFIG" ] || CONFIG="$value"
+        done
+    fi
+}
+
+# A top-level string value from an appsettings file. These allow comments, which plutil's JSON reader
+# rejects, and the keys wanted here are flat strings, so a pattern match is enough.
+json_string() {
+    sed -nE "s/^[[:space:]]*\"$2\"[[:space:]]*:[[:space:]]*\"([^\"]*)\".*/\\1/p" "$1" | head -1
 }
 
 # Where the app itself would have put its config, running under that plist with no --config: in the
