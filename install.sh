@@ -64,23 +64,102 @@ sha256() {
 
 # ------------------------------------------------------------------- service
 
+PB=/usr/libexec/PlistBuddy
+
 # Settings from an existing LaunchAgent win over defaults, so an update never silently rebinds the
-# control panel or points the service at a different configuration file.
+# control panel or points the service at a different configuration file. Reads the environment and
+# any --urls/--config arguments; values already set (from flags, or an earlier plist) are kept.
+read_settings_from() {
+    local plist="$1" i=0 arg next
+    [ -n "$URLS" ] || URLS="$($PB -c 'Print :EnvironmentVariables:PROPRESENTER_UTILITIES_URLS' "$plist" 2>/dev/null || true)"
+    [ -n "$CONFIG" ] || CONFIG="$($PB -c 'Print :EnvironmentVariables:PROPRESENTER_UTILITIES_CONFIG' "$plist" 2>/dev/null || true)"
+    while arg="$($PB -c "Print :ProgramArguments:$i" "$plist" 2>/dev/null)"; do
+        next="$($PB -c "Print :ProgramArguments:$((i + 1))" "$plist" 2>/dev/null || true)"
+        case "$arg" in
+            --urls) [ -n "$URLS" ] || URLS="$next" ;;
+            --urls=*) [ -n "$URLS" ] || URLS="${arg#--urls=}" ;;
+            --config) [ -n "$CONFIG" ] || CONFIG="$next" ;;
+            --config=*) [ -n "$CONFIG" ] || CONFIG="${arg#--config=}" ;;
+        esac
+        i=$((i + 1))
+    done
+}
+
 read_existing_settings() {
-    [ "$OS" = osx ] && [ -f "$PLIST" ] || return 0
-    local pb=/usr/libexec/PlistBuddy
-    [ -n "$URLS" ] || URLS="$($pb -c 'Print :EnvironmentVariables:PROPRESENTER_UTILITIES_URLS' "$PLIST" 2>/dev/null || true)"
-    [ -n "$CONFIG" ] || CONFIG="$($pb -c 'Print :EnvironmentVariables:PROPRESENTER_UTILITIES_CONFIG' "$PLIST" 2>/dev/null || true)"
+    [ "$OS" = osx ] || return 0
+    if [ -f "$PLIST" ]; then read_settings_from "$PLIST"; fi
+
+    local f
+    while IFS= read -r f; do
+        if [ -n "$f" ]; then read_settings_from "$f"; fi
+    done <<<"$LEGACY"
+}
+
+# LaunchAgents that run this app under a label other than ours: an install made by hand, or one
+# deployed from an IDE. Left running, they would hold the same ports as the service installed here.
+# Newline-separated, because macOS's bash 3.2 cannot expand an empty array under `set -u`.
+find_legacy_agents() {
+    LEGACY=""
+    [ "$OS" = osx ] || return 0
+    local f
+    for f in "$HOME"/Library/LaunchAgents/*.plist; do
+        [ -f "$f" ] && [ "$f" != "$PLIST" ] || continue
+        [ "$($PB -c 'Print :Label' "$f" 2>/dev/null || true)" != "$LABEL" ] || continue
+        if $PB -c 'Print :ProgramArguments' "$f" 2>/dev/null | grep -qE '/ProPresenter\.App(\.dll)?$'; then
+            LEGACY="$LEGACY$f"$'\n'
+        fi
+    done
+}
+
+# Where replaced agents' plists are parked: outside the install directory, so --uninstall keeps them,
+# and outside LaunchAgents, so launchd does not load them at the next login.
+PARKED="$HOME/Library/Application Support/propresenter-utilities/replaced-agents"
+
+wait_unloaded() {
+    for _ in $(seq 1 20); do
+        launchctl print "gui/$(id -u)/$1" >/dev/null 2>&1 || return 0
+        sleep 0.5
+    done
+}
+
+# Stops each legacy agent and parks its plist. RETIRED lists them, for restore_legacy.
+retire_legacy() {
+    RETIRED=""
+    local f label
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        label="$($PB -c 'Print :Label' "$f" 2>/dev/null || true)"
+        say "Replacing the existing install '$label' ($(basename "$f"))"
+        launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+        wait_unloaded "$label"
+        mkdir -p "$PARKED"
+        mv -f "$f" "$PARKED/"
+        RETIRED="$RETIRED$(basename "$f")"$'\n'
+    done <<<"$LEGACY"
+
+    if [ -n "$RETIRED" ]; then
+        say "Its plist was moved to $PARKED. Its program files were left where they were."
+        warn "If an IDE deployment (e.g. Rider over SSH) created it, disable that deployment so it is not recreated."
+    fi
+}
+
+# Puts the retired agents back and starts them, when the new install cannot take over.
+restore_legacy() {
+    local name
+    while IFS= read -r name; do
+        [ -n "$name" ] || continue
+        warn "Restoring the previous install ($name)"
+        mv -f "$PARKED/$name" "$HOME/Library/LaunchAgents/$name"
+        launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/$name" 2>/dev/null || true
+    done <<<"$RETIRED"
+    RETIRED=""
 }
 
 stop_service() {
     if [ "$OS" = osx ]; then
         launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
         # bootout returns before the process has always gone.
-        for _ in $(seq 1 20); do
-            launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || break
-            sleep 0.5
-        done
+        wait_unloaded "$LABEL"
     else
         systemctl --user stop "$UNIT" 2>/dev/null || true
     fi
@@ -191,14 +270,23 @@ uninstall() {
     say "Stopping and removing the service"
     stop_service
     if [ "$OS" = osx ]; then
-        rm -f "$PLIST"
+        rm -f -- "${PLIST:?}"
     else
         systemctl --user disable "$UNIT" >/dev/null 2>&1 || true
-        rm -f "$UNIT_FILE"
+        rm -f -- "${UNIT_FILE:?}"
         systemctl --user daemon-reload
     fi
-    rm -rf "$INSTALL_DIR"
-    say "Removed. Your configuration was left at ${CONFIG}."
+    # Only what install() creates, never the directory wholesale: --dir pointed at the wrong place
+    # must not be able to take anything else with it.
+    if [ -d "${INSTALL_DIR:?}/versions" ] || [ -L "$INSTALL_DIR/current" ]; then
+        rm -rf -- "${INSTALL_DIR:?}/versions"
+        rm -f -- "$INSTALL_DIR/current" "$INSTALL_DIR/installed-version"
+        rmdir -- "$INSTALL_DIR" 2>/dev/null || warn "Left $INSTALL_DIR in place: it contains other files."
+        say "Removed. Your configuration was left at ${CONFIG}."
+    else
+        warn "$INSTALL_DIR does not look like an install made by this script; left it alone."
+        say "Service removed. Your configuration was left at ${CONFIG}."
+    fi
 }
 
 resolve_tag() {
@@ -211,21 +299,34 @@ resolve_tag() {
     [ -n "$TAG" ] && [ "$TAG" != latest ] && [ "$TAG" != releases ] || die "$REPO has no releases yet."
 }
 
+# A tag becomes a directory name under versions/, so it must not be able to name a path elsewhere.
+validate_tag() {
+    case "$TAG" in
+        "" | . | .. | *[!A-Za-z0-9._-]*) die "'$TAG' is not a release tag." ;;
+    esac
+}
+
 install() {
     resolve_tag
+    validate_tag
 
     # Recorded only once a version has come up healthy, so a failed install is retried on the next run.
     local installed=""
     [ -f "$INSTALL_DIR/installed-version" ] && installed="$(cat "$INSTALL_DIR/installed-version")"
     if [ "$installed" = "$TAG" ] && [ "$FORCE" = 0 ]; then
         say "$TAG is already installed. Use --force to reinstall."
+        # Still clear out another install that has appeared since, e.g. an IDE redeploying.
+        if [ -n "$LEGACY" ]; then
+            retire_legacy
+            launchctl kickstart -k "gui/$(id -u)/$LABEL" 2>/dev/null || true
+        fi
         return
     fi
 
     say "Installing $TAG ($RID)${installed:+, replacing $installed}"
 
     TMP="$(mktemp -d)"
-    trap 'rm -rf "$TMP"' EXIT
+    trap 'rm -rf -- "${TMP:?}"' EXIT
     local tmp="$TMP"
 
     local base="$RELEASES/download/$TAG"
@@ -237,8 +338,8 @@ install() {
     actual="$(sha256 "$tmp/$ASSET")"
     [ -n "$expected" ] && [ "$expected" = "$actual" ] || die "Checksum mismatch for $ASSET."
 
-    local target="$INSTALL_DIR/versions/$TAG"
-    rm -rf "$target"
+    local target="${INSTALL_DIR:?}/versions/${TAG:?}"
+    rm -rf -- "$target"
     mkdir -p "$target"
     tar -xzf "$tmp/$ASSET" -C "$target" --strip-components=1
     chmod +x "$target/$EXE"
@@ -253,11 +354,14 @@ install() {
     [ -L "$INSTALL_DIR/current" ] && previous="$(readlink "$INSTALL_DIR/current")"
 
     stop_service
+    retire_legacy
 
     if responds; then
-        # Our service is stopped, so this is something else: likely an install made by hand.
+        # Every agent we know of is stopped, so this is something else: the app run from a terminal or
+        # an IDE, or a service under another service manager.
+        restore_legacy
         [ -n "$previous" ] && start_service
-        die "Something else is already serving $(health_url). Stop it (an older manual install?) and re-run."
+        die "Something else is already serving $(health_url). Stop it and re-run."
     fi
 
     ln -sfn "versions/$TAG" "$INSTALL_DIR/current"
@@ -271,18 +375,24 @@ install() {
         warn "$TAG did not respond on $(health_url); rolling back to ${previous#versions/}."
         stop_service
         ln -sfn "$previous" "$INSTALL_DIR/current"
-        rm -rf "$target"
+        rm -rf -- "${target:?}"
         start_service
         die "Update failed. ${LOG:+See $LOG}${UNIT_FILE:+See journalctl --user -u $UNIT}"
     else
+        # First install, nothing of ours to fall back to: remove it, so it cannot compete with the
+        # install it was replacing, and put that back.
+        stop_service
+        if [ "$OS" = osx ]; then rm -f -- "${PLIST:?}"; fi
+        restore_legacy
         die "$TAG did not respond on $(health_url). ${LOG:+See $LOG}${UNIT_FILE:+See journalctl --user -u $UNIT}"
     fi
 
     # Keep the live version and the one before it, for a manual rollback.
     local keep_prev="${previous#versions/}"
-    for dir in "$INSTALL_DIR"/versions/*; do
+    for dir in "${INSTALL_DIR:?}"/versions/*; do
+        [ -d "$dir" ] || continue
         local name="${dir##*/}"
-        [ "$name" = "$TAG" ] || [ "$name" = "$keep_prev" ] || rm -rf "$dir"
+        [ "$name" = "$TAG" ] || [ "$name" = "$keep_prev" ] || rm -rf -- "$dir"
     done
 
     if [ "$OS" = linux ] && ! loginctl show-user "$USER" -p Linger 2>/dev/null | grep -q yes; then
@@ -291,7 +401,7 @@ install() {
 }
 
 main() {
-    TAG="" FORCE=0 UNINSTALL=0 URLS="" CONFIG="" INSTALL_DIR=""
+    TAG="" FORCE=0 UNINSTALL=0 URLS="" CONFIG="" INSTALL_DIR="" LEGACY="" RETIRED=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --version) TAG="${2:?--version needs a tag}"; shift 2 ;;
@@ -306,6 +416,7 @@ main() {
     done
 
     detect_platform
+    find_legacy_agents
     read_existing_settings
     INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_DIR}"
     URLS="${URLS:-http://127.0.0.1:8752}"

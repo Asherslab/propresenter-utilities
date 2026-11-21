@@ -53,10 +53,22 @@ Options go after `bash -s --`, for example `curl -fsSL … | bash -s -- --urls h
 An update keeps the `--urls` and `--config` values the existing LaunchAgent was installed with, so
 they only need passing once.
 
-The installer manages the service label `com.propresenter.utilities`. If you previously installed by
-hand with that label, it takes the install over, keeping its URLs and config path. If something else
-is already serving the control panel's port (an older manual install under a different name, or the
-app running from an IDE), the installer stops and says so rather than starting a second copy.
+**Replacing an existing install (macOS).** The installer looks in `~/Library/LaunchAgents` for any
+other agent that runs `ProPresenter.App` or `ProPresenter.App.dll`, for example one created by hand
+or by an IDE deployment. It then:
+
+1. Takes that agent's `--urls`/`--config` settings, from its environment or arguments. If it has none,
+   the defaults match what the app uses anyway, so the same rules file is kept.
+2. Stops it, and moves its plist to `~/Library/Application Support/propresenter-utilities/replaced-agents/`.
+   Its program files are left in place.
+3. Installs and starts the new service. If that fails on a first install, it removes the new service
+   and puts the old agent back.
+
+The check runs on every run, including "already installed" ones, so an IDE that recreates its agent
+is cleared again the next time the installer runs. Disable that deployment so it stops recreating it.
+
+If something that isn't a LaunchAgent is still serving the control panel's port (the app run from a
+terminal or an IDE), the installer stops and says so rather than starting a second copy.
 
 On Linux, a user service only runs while you're logged in unless lingering is on:
 `sudo loginctl enable-linger $USER`. On Windows, download the `win-x64` zip from the releases page
