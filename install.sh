@@ -118,6 +118,11 @@ describe_port_holder() {
     port="${url##*:}"
     port="${port%%/*}"
 
+    local answer
+    answer="$(curl -s --noproxy '*' -o /dev/null -D - --max-time 2 "$url" 2>/dev/null \
+        | awk 'NR == 1 || tolower($1) == "server:"' | tr -d '\r' | paste -sd ' ' - || true)"
+    printf '    it answered: %s\n' "${answer:-(no HTTP response)}" >&2
+
     if command -v lsof >/dev/null; then
         pids="$(lsof -nP -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
         for pid in $pids; do
@@ -139,6 +144,15 @@ describe_port_holder() {
             fi
         done
     fi
+}
+
+# Re-bootstrapping straight after a bootout can fail transiently with an I/O error, so retry.
+bootstrap_agent() {
+    for _ in 1 2 3 4 5; do
+        launchctl bootstrap "gui/$(id -u)" "$1" 2>/dev/null && return 0
+        sleep 1
+    done
+    return 1
 }
 
 # Where replaced agents' plists are parked: outside the install directory, so --uninstall keeps them,
@@ -180,7 +194,8 @@ restore_legacy() {
         [ -n "$name" ] || continue
         warn "Restoring the previous install ($name)"
         mv -f "$PARKED/$name" "$HOME/Library/LaunchAgents/$name"
-        launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/$name" 2>/dev/null || true
+        bootstrap_agent "$HOME/Library/LaunchAgents/$name" \
+            || warn "Could not start it again; it will start at next login, or run: launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/$name"
     done <<<"$RETIRED"
     RETIRED=""
 }
@@ -262,12 +277,7 @@ EOF
 
 start_service() {
     if [ "$OS" = osx ]; then
-        # Re-bootstrapping straight after a bootout can fail transiently with an I/O error.
-        for _ in 1 2 3 4 5; do
-            launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null && return 0
-            sleep 1
-        done
-        die "launchctl could not load $PLIST"
+        bootstrap_agent "$PLIST" || die "launchctl could not load $PLIST"
     else
         systemctl --user enable "$UNIT" >/dev/null 2>&1
         systemctl --user restart "$UNIT"
@@ -284,7 +294,9 @@ health_url() {
     echo "${url%/}/"
 }
 
-responds() { curl -fsS -o /dev/null --max-time 2 "$(health_url)" 2>/dev/null; }
+# Loopback checks must never go through a proxy: one set in the environment would answer for a port
+# that nothing on this machine is listening on.
+responds() { curl -fsS --noproxy '*' -o /dev/null --max-time 2 "$(health_url)" 2>/dev/null; }
 
 wait_healthy() {
     for _ in $(seq 1 30); do
