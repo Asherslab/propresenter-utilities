@@ -8,7 +8,8 @@ hand-edit, diff and keep in version control.
 
 | Platform | Default path |
 | --- | --- |
-| macOS / Linux | `~/.config/propresenter-utilities/config.json` |
+| macOS | `~/Library/Application Support/propresenter-utilities/config.json` |
+| Linux | `~/.config/propresenter-utilities/config.json` (or `$XDG_CONFIG_HOME`) |
 | Windows | `%APPDATA%\propresenter-utilities\config.json` |
 
 Override it with the `PROPRESENTER_UTILITIES_CONFIG` environment variable or `--config <path>`. The

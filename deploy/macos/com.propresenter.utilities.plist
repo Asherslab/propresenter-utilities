@@ -32,7 +32,7 @@
 
         <!-- Absolute path, so the file is found regardless of the launch environment. -->
         <key>PROPRESENTER_UTILITIES_CONFIG</key>
-        <string>/Users/CHANGEME/.config/propresenter-utilities/config.json</string>
+        <string>/Users/CHANGEME/Library/Application Support/propresenter-utilities/config.json</string>
 
         <key>DOTNET_NOLOGO</key>
         <string>1</string>

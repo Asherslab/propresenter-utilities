@@ -37,7 +37,7 @@ answers. If it doesn't, it puts the previous version back.
 | App | `~/Applications/propresenter-utilities` | `~/.local/share/propresenter-utilities` |
 | Service | `~/Library/LaunchAgents/com.propresenter.utilities.plist` | `~/.config/systemd/user/propresenter-utilities.service` |
 | Logs | `~/Library/Logs/propresenter-utilities.log` | `journalctl --user -u propresenter-utilities` |
-| Config | `~/.config/propresenter-utilities/config.json` | same |
+| Config | `~/Library/Application Support/propresenter-utilities/config.json` | `~/.config/propresenter-utilities/config.json` |
 
 Options go after `bash -s --`, for example `curl -fsSL … | bash -s -- --urls http://0.0.0.0:8752`:
 
@@ -82,9 +82,9 @@ never what's meant.
 or by an IDE deployment. It then:
 
 1. Takes that agent's `--urls`/`--config` settings, from its environment or arguments. If it sets no
-   config path, the installer uses the one the app would have used: the `.config` folder in the
-   home directory of the user it runs as. For a daemon with no `UserName`, that's root's,
-   `/var/root/.config/propresenter-utilities/config.json`. If no file is there, it stops without
+   config path, the installer uses the one the app would have used: `Library/Application Support`
+   in the home directory of the user it runs as. For a daemon with no `UserName`, that's root's,
+   `/var/root/Library/Application Support/propresenter-utilities/config.json`. If no file is there, it stops without
    changing anything, rather than start the new install on an empty profile.
 2. Stops it, and moves its plist to `~/Library/Application Support/propresenter-utilities/replaced-agents/`.
    Its program files are left in place.
@@ -175,7 +175,8 @@ Default config file location:
 
 | Platform | Path |
 | --- | --- |
-| macOS / Linux | `~/.config/propresenter-utilities/config.json` |
+| macOS | `~/Library/Application Support/propresenter-utilities/config.json` |
+| Linux | `~/.config/propresenter-utilities/config.json` |
 | Windows | `%APPDATA%\propresenter-utilities\config.json` |
 
 A service running as a different user than the one you configured the app with will look in *that

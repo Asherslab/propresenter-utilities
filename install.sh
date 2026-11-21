@@ -73,7 +73,8 @@ detect_platform() {
         # launchd does not load them at the next login.
         PARKED="$HOME/Library/Application Support/propresenter-utilities/replaced-agents"
         DEFAULT_DIR="$HOME/Applications/propresenter-utilities"
-        DEFAULT_CONFIG="$HOME/.config/propresenter-utilities/config.json"
+        # The app's own default on macOS, so a service and a manual run share the same rules.
+        DEFAULT_CONFIG="$HOME/Library/Application Support/propresenter-utilities/config.json"
         LOG="$HOME/Library/Logs/propresenter-utilities.log"
     elif [ "$SYSTEM" = 1 ]; then
         DEFAULT_DIR="/opt/propresenter-utilities"
@@ -141,8 +142,9 @@ json_string() {
     sed -nE "s/^[[:space:]]*\"$2\"[[:space:]]*:[[:space:]]*\"([^\"]*)\".*/\\1/p" "$1" | head -1
 }
 
-# Where the app itself would have put its config, running under that plist with no --config: in the
-# home directory of the user it runs as (UserName, or root for a daemon without one).
+# Where the app itself would have put its config, running under that plist with no --config: .NET's
+# ApplicationData folder, which on macOS is ~/Library/Application Support, in the home directory of
+# the user it runs as (UserName, or root for a daemon without one).
 implied_config() {
     local plist="$1" user home
     user="$($PB -c 'Print :UserName' "$plist" 2>/dev/null || true)"
@@ -151,7 +153,7 @@ implied_config() {
     fi
     home="$(dscl . -read "/Users/$user" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
     [ -n "$home" ] || return 0
-    echo "$home/.config/propresenter-utilities/config.json"
+    echo "$home/Library/Application Support/propresenter-utilities/config.json"
 }
 
 read_existing_settings() {

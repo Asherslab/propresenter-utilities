@@ -128,8 +128,9 @@ public sealed class ConfigurationStore
     }
 
     /// <summary>
-    /// Per-user configuration directory. <c>%APPDATA%</c> on Windows, <c>$XDG_CONFIG_HOME</c> or
-    /// <c>~/.config</c> elsewhere. Overridable so a service can point at a shared location.
+    /// Per-user configuration directory: .NET's ApplicationData folder, which is <c>%APPDATA%</c> on
+    /// Windows, <c>~/Library/Application Support</c> on macOS, and <c>$XDG_CONFIG_HOME</c> or
+    /// <c>~/.config</c> on Linux. Overridable so a service can point at a shared location.
     /// </summary>
     public static string ResolveDefaultPath()
     {
