@@ -64,6 +64,42 @@ public class LightsTests
     }
 
     [Fact]
+    public void The_embedded_script_carries_the_version_marker_it_is_recognised_by()
+    {
+        Assert.StartsWith(ShellyClient.ScriptMarker, ShellyClient.ScriptCode);
+        Assert.Contains("HTTPServer.registerEndpoint(\"set\"", ShellyClient.ScriptCode);
+    }
+
+    [Fact]
+    public void Script_upload_chunks_reassemble_to_the_script()
+    {
+        var chunks = ShellyClient.Chunks(ShellyClient.ScriptCode).ToList();
+
+        Assert.All(chunks, c => Assert.InRange(c.Length, 1, 1000));
+        Assert.Equal(ShellyClient.ScriptCode, string.Concat(chunks));
+    }
+
+    [Fact]
+    public void Script_request_names_every_output()
+    {
+        Assert.Equal(
+            "http://192.168.1.50/script/1/set?ids=0,1,2,3&on=false&toggle_after=46",
+            ShellyClient.BuildScriptUri("192.168.1.50", 1, [0, 1, 2, 3], on: false, TimeSpan.FromSeconds(45.2)).ToString());
+    }
+
+    [Fact]
+    public void Script_results_map_to_outputs_in_order()
+    {
+        var results = ShellyClient.ParseScriptResponse([0, 7], """{"results":[null,"Argument 'id', value 7 not found!"]}""");
+
+        Assert.NotNull(results);
+        Assert.True(results![0].Success);
+        Assert.False(results[1].Success);
+        Assert.Equal("Argument 'id', value 7 not found!", results[1].Error);
+        Assert.Null(ShellyClient.ParseScriptResponse([0], "ids required"));
+    }
+
+    [Fact]
     public void All_means_the_configured_outputs()
     {
         Assert.Equal([0, 1, 2, 3], LightsController.ParseChannels("all", "0,1,2,3"));

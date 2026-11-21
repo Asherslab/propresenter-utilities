@@ -15,4 +15,9 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Installed onto the Shelly so one request switches every output together. -->
+    <EmbeddedResource Include="Shelly\propresenter-utilities.js" LogicalName="ShellyScript.js" />
+  </ItemGroup>
+
 </Project>

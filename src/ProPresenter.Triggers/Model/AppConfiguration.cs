@@ -48,6 +48,12 @@ public sealed record LightsSettings
 
     /// <summary>The relay outputs an action set to "all" switches. A Pro4PM has 0–3.</summary>
     public string Channels { get; set; } = "0,1,2,3";
+
+    /// <summary>
+    /// Install a small script on the Shelly so several outputs switch from one request, together.
+    /// Without it each output is a separate request, and they change visibly out of step.
+    /// </summary>
+    public bool SyncWithScript { get; set; } = true;
 }
 
 /// <summary>Root of the on-disk configuration file.</summary>

@@ -89,6 +89,11 @@
         </div>
     </div>
 
+    <label class="switch">
+        <input type="checkbox" @bind="_lightsSync" />
+        <span>Switch all outputs together, using a small script installed on the Shelly</span>
+    </label>
+
     <div class="hint">
         Test reads each output's state without switching anything. The password is stored in plain
         text in the configuration file below.
@@ -165,6 +170,7 @@
     private string _lightsHost = string.Empty;
     private string? _lightsPassword;
     private string _lightsChannels = "0,1,2,3";
+    private bool _lightsSync = true;
     private string? _lightsResult;
     private bool _lightsOk;
 
@@ -178,6 +184,7 @@
         _lightsHost = lights.Host;
         _lightsPassword = lights.Password;
         _lightsChannels = lights.Channels;
+        _lightsSync = lights.SyncWithScript;
     }
 
     private void SaveLights()
@@ -190,6 +197,7 @@
                 Host = _lightsHost.Trim(),
                 Password = string.IsNullOrEmpty(_lightsPassword) ? null : _lightsPassword,
                 Channels = string.IsNullOrWhiteSpace(_lightsChannels) ? "0,1,2,3" : _lightsChannels.Trim(),
+                SyncWithScript = _lightsSync,
             },
         });
         _lightsResult = null;

@@ -278,7 +278,8 @@ public sealed class LightsController(
         CancellationToken ct)
     {
         var settings = config.Current.Lights;
-        var results = await shelly.SetAsync(settings.Host, settings.Password, channels, on, toggleAfter, ct);
+        var results = await shelly.SetAsync(settings.Host, settings.Password, channels, on, toggleAfter,
+            useScript: settings.SyncWithScript, ct);
 
         lock (_gate)
         {
