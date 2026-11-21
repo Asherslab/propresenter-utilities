@@ -51,8 +51,15 @@ public class ActionCatalogTests
         return data;
     }
 
+    public static TheoryData<string> ProPresenterActionIds()
+    {
+        var data = new TheoryData<string>();
+        foreach (var action in ActionCatalog.All.Where(a => a.Target == ActionTarget.ProPresenter)) data.Add(action.Id);
+        return data;
+    }
+
     [Theory]
-    [MemberData(nameof(AllActionIds))]
+    [MemberData(nameof(ProPresenterActionIds))]
     public void Every_action_targets_a_real_endpoint(string actionId)
     {
         var action = ActionCatalog.Find(actionId)!;
@@ -131,6 +138,16 @@ public class ActionCatalogTests
             Assert.False(string.IsNullOrWhiteSpace(action.Category), $"{action.Id} has no category");
             Assert.False(string.IsNullOrWhiteSpace(action.Name), $"{action.Id} has no name");
             Assert.False(string.IsNullOrWhiteSpace(action.Description), $"{action.Id} has no description");
+        }
+    }
+
+    [Fact]
+    public void Non_ProPresenter_actions_carry_no_api_path()
+    {
+        foreach (var action in ActionCatalog.All.Where(a => a.Target != ActionTarget.ProPresenter))
+        {
+            Assert.True(string.IsNullOrEmpty(action.PathTemplate), $"{action.Id} has a path but is not a ProPresenter call");
+            Assert.Equal(BodySource.None, action.BodySource);
         }
     }
 }

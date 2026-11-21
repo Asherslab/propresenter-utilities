@@ -71,8 +71,21 @@ public enum BodySource
     NumberParameter,
 }
 
+/// <summary>Which system an action talks to.</summary>
+public enum ActionTarget
+{
+    /// <summary>ProPresenter's own API. <see cref="ActionDefinition.PathTemplate"/> is an API path.</summary>
+    ProPresenter,
+
+    /// <summary>
+    /// The FOH lights, via a Shelly relay. Executed by an <see cref="IActionHandler"/> rather than as a
+    /// ProPresenter request; <see cref="ActionDefinition.PathTemplate"/> is unused.
+    /// </summary>
+    Lights,
+}
+
 /// <summary>
-/// One thing this utility can tell ProPresenter to do when a trigger fires.
+/// One thing this utility can do when a trigger fires — usually a ProPresenter API call.
 /// </summary>
 /// <param name="Id">Stable identifier persisted in profile files. Never change these.</param>
 /// <param name="PathTemplate">API path with <c>{key}</c> placeholders matching parameter keys.</param>
@@ -85,7 +98,8 @@ public sealed record ActionDefinition(
     string PathTemplate,
     IReadOnlyList<ActionParameter> Parameters,
     BodySource BodySource = BodySource.None,
-    string? BodyParameterKey = null)
+    string? BodyParameterKey = null,
+    ActionTarget Target = ActionTarget.ProPresenter)
 {
     public HttpMethod HttpMethod => Method switch
     {

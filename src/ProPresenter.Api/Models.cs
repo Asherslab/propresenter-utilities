@@ -148,3 +148,15 @@ public sealed record VersionInfo
     [JsonPropertyName("host_description")] public string? HostDescription { get; init; }
     [JsonPropertyName("api_version")] public string? ApiVersion { get; init; }
 }
+
+/// <summary>What <c>/v1/transport/{layer}/current</c> reports as playing on a layer.</summary>
+public sealed record TransportMedia
+{
+    [JsonPropertyName("uuid")] public string? Uuid { get; init; }
+    [JsonPropertyName("name")] public string? Name { get; init; }
+    [JsonPropertyName("is_playing")] public bool IsPlaying { get; init; }
+    [JsonPropertyName("audio_only")] public bool AudioOnly { get; init; }
+
+    /// <summary>Length in seconds. Zero or absent for items with no fixed length.</summary>
+    [JsonPropertyName("duration")] public double Duration { get; init; }
+}

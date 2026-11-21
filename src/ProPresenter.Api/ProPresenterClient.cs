@@ -30,11 +30,23 @@ public sealed class ProPresenterClient(
     /// Issues an arbitrary API request. This is what the action executor uses, so every catalog entry
     /// funnels through one place for logging and error handling.
     /// </summary>
-    public async Task<ApiResult> SendAsync(
+    public Task<ApiResult> SendAsync(
         HttpMethod method,
         string path,
         object? body = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default) =>
+        SendAsync(method, path, body, quietNotFound: false, ct);
+
+    /// <param name="quietNotFound">
+    /// Treat a 404 as an expected answer rather than a warning — the transport endpoints return one
+    /// whenever a layer is empty, and are polled.
+    /// </param>
+    private async Task<ApiResult> SendAsync(
+        HttpMethod method,
+        string path,
+        object? body,
+        bool quietNotFound,
+        CancellationToken ct)
     {
         var uri = endpoint.Resolve(path);
         using var request = new HttpRequestMessage(method, uri);
@@ -55,6 +67,11 @@ public sealed class ProPresenterClient(
 
             if (!response.IsSuccessStatusCode)
             {
+                if (quietNotFound && response.StatusCode == HttpStatusCode.NotFound)
+                {
+                    return ApiResult.Failure("404 Not Found", response.StatusCode, payload);
+                }
+
                 logger.LogWarning("ProPresenter {Method} {Path} returned {Status}", method, path, (int)response.StatusCode);
                 return ApiResult.Failure($"{(int)response.StatusCode} {response.ReasonPhrase}", response.StatusCode, payload);
             }
@@ -99,9 +116,9 @@ public sealed class ProPresenterClient(
         }
     }
 
-    private async Task<T?> GetJsonAsync<T>(string path, CancellationToken ct)
+    private async Task<T?> GetJsonAsync<T>(string path, CancellationToken ct, bool quietNotFound = false)
     {
-        var result = await SendAsync(HttpMethod.Get, path, body: null, ct);
+        var result = await SendAsync(HttpMethod.Get, path, body: null, quietNotFound, ct);
         if (!result.Success || string.IsNullOrWhiteSpace(result.Body)) return default;
 
         try
@@ -151,6 +168,35 @@ public sealed class ProPresenterClient(
     public Task<ApiResult> DeleteTimerAsync(string timerId, CancellationToken ct = default) =>
         SendAsync(HttpMethod.Delete, $"v1/timer/{Escape(timerId)}", body: null, ct);
 
+    // ----------------------------------------------------------- transport
+
+    /// <summary>
+    /// What is on a transport layer. Distinguishes "nothing there" (ProPresenter answers 404, or with no
+    /// item) from "no answer", because a watcher should not treat a dropped request as the video ending.
+    /// </summary>
+    public async Task<TransportReading> GetTransportCurrentAsync(string layer, CancellationToken ct = default)
+    {
+        var result = await SendAsync(HttpMethod.Get, $"v1/transport/{Escape(layer)}/current", body: null, quietNotFound: true, ct);
+        if (result.StatusCode == HttpStatusCode.NotFound) return new TransportReading(true, null);
+        if (!result.Success) return new TransportReading(false, null);
+        if (string.IsNullOrWhiteSpace(result.Body)) return new TransportReading(true, null);
+
+        try
+        {
+            var media = JsonSerializer.Deserialize<TransportMedia>(result.Body, JsonOptions);
+            return new TransportReading(true, string.IsNullOrWhiteSpace(media?.Uuid) ? null : media);
+        }
+        catch (JsonException ex)
+        {
+            logger.LogWarning(ex, "Could not deserialize transport state for layer {Layer}", layer);
+            return new TransportReading(false, null);
+        }
+    }
+
+    /// <summary>Playback position on a transport layer, in seconds.</summary>
+    public Task<double?> GetTransportTimeAsync(string layer, CancellationToken ct = default) =>
+        GetJsonAsync<double?>($"v1/transport/{Escape(layer)}/time", ct, quietNotFound: true);
+
     // ----------------------------------------------------- pickers / lists
 
     public async Task<IReadOnlyList<MacroInfo>> GetMacrosAsync(CancellationToken ct = default) =>
@@ -191,6 +237,9 @@ public sealed class ProPresenterClient(
 
     private static string Escape(string value) => Uri.EscapeDataString(value);
 }
+
+/// <param name="Reachable">False when ProPresenter did not answer, so <paramref name="Media"/> means nothing.</param>
+public sealed record TransportReading(bool Reachable, TransportMedia? Media);
 
 public sealed record ApiResult(bool Success, string? Body, HttpStatusCode? StatusCode, string? Error)
 {

@@ -4,6 +4,7 @@
 @inject ConfigurationStore Config
 @inject ProPresenterClient Client
 @inject TimerStream Stream
+@inject LightsController Lights
 
 <PageTitle>Dashboard — ProPresenter Utilities</PageTitle>
 
@@ -54,6 +55,44 @@
         <button class="small" @onclick="() => ResetAll()">Reset all</button>
     </div>
 </div>
+
+@if (Configuration.Lights.Enabled)
+{
+    var lights = Lights.Status;
+    <div class="card">
+        <div class="row">
+            <strong>FOH lights</strong>
+            @switch (lights.LastCommandedOn)
+            {
+                case true: <span class="badge ok">on</span> break;
+                case false: <span class="badge warn">off</span> break;
+                default: <span class="badge">unknown</span> break;
+            }
+
+            @if (lights.Phase == LatchPhase.WaitingForVideo)
+            {
+                <span class="hint">Off for a video — waiting for it to start</span>
+            }
+            else if (lights.Phase == LatchPhase.Tracking)
+            {
+                <span class="hint">Off until <strong>@lights.VideoName</strong> ends</span>
+            }
+            else if (lights.RestorePending)
+            {
+                <span class="hint">Video ended — coming back on</span>
+            }
+
+            <span class="spacer"></span>
+
+            <button class="small" @onclick="() => SwitchLights(true)">Lights on</button>
+            <button class="small" @onclick="() => SwitchLights(false)">Lights off</button>
+        </div>
+        @if (_lightsError is not null)
+        {
+            <div class="warning-banner" style="margin-top: 0.6rem;">@_lightsError</div>
+        }
+    </div>
+}
 
 @if (Timers.Count == 0)
 {
@@ -163,7 +202,19 @@ else
 
     private int RuleCount => Configuration.ActiveProfile?.Rules.Count(r => r.Enabled) ?? 0;
 
-    protected override void OnInitialized() => Engine.Updated += OnUpdated;
+    private string? _lightsError;
+
+    protected override void OnInitialized()
+    {
+        Engine.Updated += OnUpdated;
+        Lights.Updated += OnUpdated;
+    }
+
+    private async Task SwitchLights(bool on)
+    {
+        var outcome = await Lights.SetManuallyAsync(on);
+        _lightsError = outcome.Success ? null : outcome.Error;
+    }
 
     private void OnUpdated() => InvokeAsync(StateHasChanged);
 
@@ -223,5 +274,9 @@ else
         }
     }
 
-    public void Dispose() => Engine.Updated -= OnUpdated;
+    public void Dispose()
+    {
+        Engine.Updated -= OnUpdated;
+        Lights.Updated -= OnUpdated;
+    }
 }

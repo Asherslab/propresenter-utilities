@@ -30,6 +30,26 @@ public sealed record SignalSettings
     public int RossTalkPort { get; set; } = 7788;
 }
 
+/// <summary>
+/// The Shelly relay that switches the FOH lights. Driven by the <c>lights.*</c> actions.
+/// </summary>
+public sealed record LightsSettings
+{
+    public bool Enabled { get; set; }
+
+    /// <summary>IP address or host name of the Shelly, e.g. <c>192.168.1.50</c>.</summary>
+    public string Host { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Only needed when authentication is enabled on the device. Stored in plain text in the
+    /// configuration file, like the rest of this app's settings.
+    /// </summary>
+    public string? Password { get; set; }
+
+    /// <summary>The relay outputs an action set to "all" switches. A Pro4PM has 0–3.</summary>
+    public string Channels { get; set; } = "0,1,2,3";
+}
+
 /// <summary>Root of the on-disk configuration file.</summary>
 public sealed record AppConfiguration
 {
@@ -39,6 +59,8 @@ public sealed record AppConfiguration
     public ConnectionSettings Connection { get; init; } = new();
 
     public SignalSettings Signals { get; init; } = new();
+
+    public LightsSettings Lights { get; init; } = new();
 
     public List<TriggerProfile> Profiles { get; init; } = [];
 

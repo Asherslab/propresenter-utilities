@@ -33,6 +33,11 @@ than refusing to start; fix the file and restart.
     "rossTalkEnabled": true,
     "rossTalkPort": 7788
   },
+  "lights": {
+    "enabled": true,
+    "host": "192.168.1.50",
+    "channels": "0,1,2,3"
+  },
   "triggersArmed": true,
   "activeProfileId": "4ba4234c-a8a5-4633-8178-8abead7572c4",
   "profiles": [
@@ -107,6 +112,9 @@ than refusing to start; fix the file and restart.
 | `version` | Format version. Currently `1`. |
 | `connection.host` / `connection.port` | Where ProPresenter is. Changing this from the Settings page reconnects the timer stream without a restart. |
 | `signals.rossTalkEnabled` / `signals.rossTalkPort` | The inbound RossTalk listener that lets a ProPresenter macro fire rules. See [SIGNALS.md](SIGNALS.md). |
+| `lights.enabled` / `lights.host` | The Shelly relay that the FOH lights actions switch. See [LIGHTS.md](LIGHTS.md). |
+| `lights.password` | Only if authentication is enabled on the Shelly. Stored in plain text. Omitted when unset. |
+| `lights.channels` | The relay outputs an action set to `all` switches. A Pro4PM has `0`–`3`. |
 | `triggersArmed` | Master switch. When `false` the dashboard still updates but nothing fires. |
 | `activeProfileId` | The profile whose rules are armed. Must match one of the profiles. |
 | `profiles` | All profiles, active or not. |
@@ -191,8 +199,8 @@ Values are always strings, including numbers and booleans (`"true"`, `"60"`). An
 
 Use **Export profiles** and **Import profiles** on the Settings page, or copy the file directly.
 
-Import deliberately keeps the *current* machine's `connection` block, since an imported file usually
-comes from a different machine with a different host or port.
+Import deliberately keeps the *current* machine's `connection` and `lights` blocks, since an imported
+file usually comes from a different machine with a different host or port.
 
 Object references are UUIDs from the source ProPresenter instance. Importing into a *different*
 ProPresenter installation will leave those references dangling — the editor shows them as

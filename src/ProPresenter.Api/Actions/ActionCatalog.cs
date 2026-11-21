@@ -17,6 +17,7 @@ public static class ActionCatalog
         ["audio", "props", "messages", "announcements", "slide", "media", "video_input"];
     private static readonly string[] TimerOperations = ["start", "stop", "reset"];
     private static readonly string[] CaptureOperations = ["start", "stop"];
+    private static readonly string[] LightStates = ["off", "on"];
 
     private static ActionParameter Index(string key = "index", string label = "Item index", string? help = null) =>
         new(key, label, ParameterKind.Integer, help ?? "Zero-based index.", "0");
@@ -491,6 +492,33 @@ public static class ActionCatalog
             "Turns the stage screens on or off.", "PUT", "v1/status/stage_screens",
             [new ActionParameter("enabled", "Enabled", ParameterKind.Boolean, null, "true")],
             BodySource.BooleanParameter, "enabled");
+
+        // ------------------------------------------------------ FOH lights
+        // Not ProPresenter calls: these switch the Shelly relay configured under Settings → FOH lights.
+        var channels = new ActionParameter("channels", "Channels", ParameterKind.Text,
+            "Relay outputs to switch: \"all\", or a list such as \"0,1,2,3\".", "all");
+
+        a.Add(new ActionDefinition("lights.set", "FOH lights", "Turn lights on / off",
+            "Switches the FOH lights. Also cancels a pending \"lights off for this video\".", "GET", "",
+            [
+                new ActionParameter("state", "State", ParameterKind.Choice, null, "off", LightStates),
+                channels,
+                new ActionParameter("failsafe", "Switch back after (s)", ParameterKind.Seconds,
+                    "The relay itself flips back after this many seconds, even if this app is not running. 0 = never.", "0"),
+            ],
+            Target: ActionTarget.Lights));
+
+        a.Add(new ActionDefinition("lights.off_for_video", "FOH lights", "Lights off for this video",
+            "Turns the FOH lights off, then back on when the video playing on the presentation layer ends. "
+            + "Put this on a macro attached to the video's cue.", "GET", "",
+            [
+                channels,
+                new ActionParameter("failsafe", "Failsafe margin (s)", ParameterKind.Seconds,
+                    "Once the video's length is known the relay is told to come back on by itself this long after "
+                    + "the video should finish, in case this app or ProPresenter goes away. 0 = no failsafe. Off by default "
+                    + "until the relay's flip-back behaviour is confirmed — see docs/LIGHTS.md.", "0"),
+            ],
+            Target: ActionTarget.Lights));
 
         return a;
     }

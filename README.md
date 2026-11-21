@@ -61,6 +61,12 @@ For running it automatically at login or boot, see [docs/INSTALL.md](docs/INSTAL
 - **Activity** — everything that has fired, with timestamps and per-action success or failure.
 - **Settings** — connection, cached ProPresenter lists, config file location, import/export.
 
+## FOH lights
+
+Any trigger can also switch the front-of-house lights through a Shelly relay (a Pro4PM, for example),
+including a **Lights off for this video** action that brings them back up by itself when the video
+ends. [docs/LIGHTS.md](docs/LIGHTS.md) has the setup and the four cues it was built for.
+
 ## Trigger types
 
 A rule is triggered either by **a timer** or by **a macro / signal**.

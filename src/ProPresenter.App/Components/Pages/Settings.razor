@@ -4,6 +4,7 @@
 @inject TimerStream Stream
 @inject LookupCache Lookups
 @inject ActivityLog Log
+@inject LightsController Lights
 
 <PageTitle>Settings — ProPresenter Utilities</PageTitle>
 
@@ -53,6 +54,52 @@
             }
         </span>
     </div>
+</div>
+
+<div class="card">
+    <h2>FOH lights</h2>
+    <p class="hint">
+        A Shelly Gen2 relay (such as a Pro4PM) switched by the <strong>FOH lights</strong> actions.
+        See <span class="mono">docs/LIGHTS.md</span> for the cues this is built for.
+    </p>
+
+    <label class="switch">
+        <input type="checkbox" @bind="_lightsEnabled" />
+        <span>Enabled</span>
+    </label>
+
+    <div class="row" style="align-items: flex-end;">
+        <div class="field">
+            <label>Shelly address</label>
+            <input @bind="_lightsHost" placeholder="192.168.1.50" />
+        </div>
+        <div class="field">
+            <label>Password</label>
+            <input type="password" @bind="_lightsPassword" placeholder="only if auth is on" autocomplete="off" />
+        </div>
+        <div class="field">
+            <label>Outputs for "all"</label>
+            <input @bind="_lightsChannels" placeholder="0,1,2,3" />
+        </div>
+        <div class="field">
+            <button class="primary" @onclick="SaveLights">Save</button>
+        </div>
+        <div class="field">
+            <button @onclick="TestLights">Test</button>
+        </div>
+    </div>
+
+    <div class="hint">
+        Test reads each output's state without switching anything. The password is stored in plain
+        text in the configuration file below.
+    </div>
+
+    @if (_lightsResult is not null)
+    {
+        <div class="warning-banner" style="margin-top: 0.75rem; @(_lightsOk ? "border-color: rgba(56,184,124,0.4); background: rgba(56,184,124,0.12); color: var(--ok);" : "")">
+            @_lightsResult
+        </div>
+    }
 </div>
 
 <div class="card">
@@ -114,11 +161,67 @@
     private bool _testOk;
     private string? _exported;
     private string? _importMessage;
+    private bool _lightsEnabled;
+    private string _lightsHost = string.Empty;
+    private string? _lightsPassword;
+    private string _lightsChannels = "0,1,2,3";
+    private string? _lightsResult;
+    private bool _lightsOk;
 
     protected override void OnInitialized()
     {
         _host = Config.Current.Connection.Host;
         _port = Config.Current.Connection.Port;
+
+        var lights = Config.Current.Lights;
+        _lightsEnabled = lights.Enabled;
+        _lightsHost = lights.Host;
+        _lightsPassword = lights.Password;
+        _lightsChannels = lights.Channels;
+    }
+
+    private void SaveLights()
+    {
+        Config.Update(c => c with
+        {
+            Lights = new LightsSettings
+            {
+                Enabled = _lightsEnabled,
+                Host = _lightsHost.Trim(),
+                Password = string.IsNullOrEmpty(_lightsPassword) ? null : _lightsPassword,
+                Channels = string.IsNullOrWhiteSpace(_lightsChannels) ? "0,1,2,3" : _lightsChannels.Trim(),
+            },
+        });
+        _lightsResult = null;
+        Log.Info(_lightsEnabled ? $"FOH lights set to Shelly at {_lightsHost.Trim()}" : "FOH lights disabled");
+    }
+
+    private async Task TestLights()
+    {
+        SaveLights();
+        if (string.IsNullOrWhiteSpace(_lightsHost))
+        {
+            _lightsOk = false;
+            _lightsResult = "Enter the Shelly's address first.";
+            return;
+        }
+
+        try
+        {
+            var states = await Lights.ReadStatesAsync();
+            _lightsOk = states.Values.All(v => v is not null);
+            _lightsResult = string.Join(", ", states.Select(s =>
+                $"output {s.Key}: {(s.Value is { } on ? (on ? "on" : "off") : "no answer")}"));
+            if (!_lightsOk)
+            {
+                _lightsResult += ". Check the address, the password, and that these outputs exist.";
+            }
+        }
+        catch (Exception ex)
+        {
+            _lightsOk = false;
+            _lightsResult = ex.Message;
+        }
     }
 
     private void SaveConnection()
@@ -164,8 +267,8 @@
                 return;
             }
 
-            // Keep the current connection: an imported file usually came from another machine.
-            Config.Replace(imported with { Connection = Config.Current.Connection });
+            // Keep the current connection and lights: an imported file usually came from another machine.
+            Config.Replace(imported with { Connection = Config.Current.Connection, Lights = Config.Current.Lights });
             _importMessage = $"Imported {imported.Profiles.Count} profile(s).";
             Log.Success(_importMessage);
         }

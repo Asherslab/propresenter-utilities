@@ -30,15 +30,30 @@ public sealed record ActionInvocation
 
 public sealed record ActionOutcome(bool Success, string Summary, string? Error = null);
 
-/// <summary>Turns an <see cref="ActionInvocation"/> into an API call.</summary>
-public sealed class ActionExecutor(ProPresenterClient client, ILogger<ActionExecutor> logger)
+/// <summary>
+/// Turns an <see cref="ActionInvocation"/> into an API call, or hands it to the
+/// <see cref="IActionHandler"/> for its target.
+/// </summary>
+public sealed class ActionExecutor(
+    ProPresenterClient client,
+    IEnumerable<IActionHandler> handlers,
+    ILogger<ActionExecutor> logger)
 {
+    private readonly Dictionary<ActionTarget, IActionHandler> _handlers = handlers.ToDictionary(h => h.Target);
+
     public async Task<ActionOutcome> ExecuteAsync(ActionInvocation invocation, CancellationToken ct = default)
     {
         var definition = ActionCatalog.Find(invocation.ActionId);
         if (definition is null)
         {
             return new ActionOutcome(false, invocation.ActionId, $"Unknown action '{invocation.ActionId}'.");
+        }
+
+        if (definition.Target != ActionTarget.ProPresenter)
+        {
+            return _handlers.TryGetValue(definition.Target, out var handler)
+                ? await handler.ExecuteAsync(definition, invocation, ct)
+                : new ActionOutcome(false, Describe(definition, invocation), $"No handler for {definition.Target} actions.");
         }
 
         string path;

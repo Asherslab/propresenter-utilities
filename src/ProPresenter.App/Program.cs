@@ -1,8 +1,10 @@
 using ProPresenter.Api;
 using ProPresenter.Api.Actions;
+using ProPresenter.Api.Shelly;
 using ProPresenter.App.Components;
 using ProPresenter.App.Services;
 using ProPresenter.Triggers;
+using ProPresenter.Triggers.Lights;
 using ProPresenter.Triggers.Signals;
 
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions
@@ -45,6 +47,13 @@ builder.Services.AddSingleton(sp => new TimerStream(
     sp.GetRequiredService<IHttpClientFactory>().CreateClient("propresenter-stream"),
     sp.GetRequiredService<ProPresenterEndpoint>(),
     sp.GetRequiredService<ILogger<TimerStream>>()));
+
+// FOH lights: a Shelly relay, switched by the lights.* actions, plus the watcher that brings the
+// lights back when a video that turned them off ends.
+builder.Services.AddSingleton<ShellyClient>();
+builder.Services.AddSingleton<LightsController>();
+builder.Services.AddSingleton<IActionHandler>(sp => sp.GetRequiredService<LightsController>());
+builder.Services.AddHostedService<MediaWatcher>();
 
 builder.Services.AddSingleton<ActionExecutor>();
 builder.Services.AddSingleton<ActivityLog>();

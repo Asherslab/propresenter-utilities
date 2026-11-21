@@ -3,14 +3,14 @@
 Every ProPresenter operation a trigger can perform, and — explicitly — every operation that is not
 exposed, with the reason why.
 
-The catalog contains **121 actions** covering **127 of the 242 operations** in ProPresenter's OpenAPI
-document. Every operation that *changes ProPresenter's live output state* is available; what is left
+The catalog contains **121 ProPresenter actions** covering **127 of the 242 operations** in
+ProPresenter's OpenAPI document, plus two [FOH lights](#foh-lights) actions that switch a Shelly relay. Every operation that *changes ProPresenter's live output state* is available; what is left
 out is reads, thumbnails, and object management, for the reasons given at the bottom.
 
 Each action's identifier is stored in your profile file and is treated as a stable contract, so
 upgrades will not silently repoint a cue at a different operation.
 
-> Actions are validated against `swagger.json` by the test suite: every path and method in the catalog
+> ProPresenter actions are validated against `swagger.json` by the test suite: every path and method in the catalog
 > must exist in the spec, every `{placeholder}` must have a matching parameter, and every choice
 > parameter must have a valid default. A mistyped endpoint fails `dotnet test`.
 
@@ -228,6 +228,16 @@ rules can still be written offline; anywhere a name, index or UUID is accepted, 
 | --- | --- |
 | Enable / disable audience screens | `PUT /v1/status/audience_screens` |
 | Enable / disable stage screens | `PUT /v1/status/stage_screens` |
+
+### FOH lights
+
+These two are not ProPresenter calls. They switch the Shelly relay set up under **Settings → FOH
+lights**, using its `Switch.Set` RPC. See [LIGHTS.md](LIGHTS.md).
+
+| Action | What it does |
+| --- | --- |
+| Turn lights on / off | Switches the chosen outputs, optionally telling the relay to flip back by itself after a number of seconds. Cancels a pending "lights off for this video". |
+| Lights off for this video | Turns the lights off, then back on when the video on the presentation transport layer ends. |
 
 ## Not exposed
 
