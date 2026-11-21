@@ -48,6 +48,25 @@ public sealed record LightsSettings
 
     /// <summary>The relay outputs an action set to "all" switches. A Pro4PM has 0–3.</summary>
     public string Channels { get; set; } = "0,1,2,3";
+
+    /// <summary>
+    /// Optional order to switch outputs in. Turning on runs the groups first to last; turning off
+    /// runs them last to first with the same gaps. Empty means every output switches together.
+    /// </summary>
+    public List<LightGroup> Sequence { get; set; } = [];
+}
+
+/// <summary>A batch of outputs that switch together, as one step of <see cref="LightsSettings.Sequence"/>.</summary>
+public sealed record LightGroup
+{
+    /// <summary>A label for the UI and logs, e.g. "Wides".</summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>Comma-separated relay outputs, e.g. <c>0,1</c>.</summary>
+    public string Channels { get; set; } = string.Empty;
+
+    /// <summary>Gap between the previous group and this one. Ignored on the first group.</summary>
+    public double DelayBeforeSeconds { get; set; } = 0.1;
 }
 
 /// <summary>Root of the on-disk configuration file.</summary>

@@ -18,6 +18,7 @@ public static class ActionCatalog
     private static readonly string[] TimerOperations = ["start", "stop", "reset"];
     private static readonly string[] CaptureOperations = ["start", "stop"];
     private static readonly string[] LightStates = ["off", "on"];
+    private static readonly string[] LightOrders = ["in order", "all together"];
 
     private static ActionParameter Index(string key = "index", string label = "Item index", string? help = null) =>
         new(key, label, ParameterKind.Integer, help ?? "Zero-based index.", "0");
@@ -497,6 +498,9 @@ public static class ActionCatalog
         // Not ProPresenter calls: these switch the Shelly relay configured under Settings → FOH lights.
         var channels = new ActionParameter("channels", "Channels", ParameterKind.Text,
             "Relay outputs to switch: \"all\", or a list such as \"0,1,2,3\".", "all");
+        var order = new ActionParameter("order", "Order", ParameterKind.Choice,
+            "\"in order\" follows Settings → FOH lights → Order (on first to last, off last to first); "
+            + "\"all together\" switches every output at once.", "in order", LightOrders);
 
         a.Add(new ActionDefinition("lights.set", "FOH lights", "Turn lights on / off",
             "Switches the FOH lights. Also cancels a pending \"lights off for this video\".", "GET", "",
@@ -505,6 +509,7 @@ public static class ActionCatalog
                 channels,
                 new ActionParameter("failsafe", "Switch back after (s)", ParameterKind.Seconds,
                     "The relay itself flips back after this many seconds, even if this app is not running. 0 = never.", "0"),
+                order,
             ],
             Target: ActionTarget.Lights));
 
@@ -517,6 +522,7 @@ public static class ActionCatalog
                     "Once the video's length is known the relay is told to come back on by itself this long after "
                     + "the video should finish, in case this app or ProPresenter goes away. 0 = no failsafe. Off by default "
                     + "until the relay's flip-back behaviour is confirmed — see docs/LIGHTS.md.", "0"),
+                order,
             ],
             Target: ActionTarget.Lights));
 

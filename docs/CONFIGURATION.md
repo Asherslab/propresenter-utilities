@@ -116,6 +116,7 @@ than refusing to start; fix the file and restart.
 | `lights.enabled` / `lights.host` | The Shelly relay that the FOH lights actions switch. See [LIGHTS.md](LIGHTS.md). |
 | `lights.password` | Only if authentication is enabled on the Shelly. Stored in plain text. Omitted when unset. |
 | `lights.channels` | The relay outputs an action set to `all` switches. A Pro4PM has `0`–`3`. |
+| `lights.sequence` | Optional order to switch in: a list of `{ "name", "channels", "delayBeforeSeconds" }` groups. On runs first to last, off last to first. Empty means all together. See [LIGHTS.md](LIGHTS.md#order-switching-in-batches). |
 | `triggersArmed` | Master switch. When `false` the dashboard still updates but nothing fires. |
 | `activeProfileId` | The profile whose rules are armed. Must match one of the profiles. |
 | `profiles` | All profiles, active or not. |

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using Microsoft.Extensions.Logging;
 using ProPresenter.Api;
@@ -45,6 +46,7 @@ public sealed class LightsController(
     private readonly VideoLatch _latch = new();
 
     private IReadOnlyList<int> _latchChannels = [];
+    private bool _latchOrdered = true;
     private TimeSpan _failsafeMargin;
     private CancellationTokenSource? _pendingRestore;
     private bool? _lastCommandedOn;
@@ -84,6 +86,8 @@ public sealed class LightsController(
 
         IReadOnlyList<int> channels;
         TimeSpan failsafe;
+        var ordered = !string.Equals(invocation.Arguments.GetValueOrDefault("order"), "all together",
+            StringComparison.OrdinalIgnoreCase);
         try
         {
             channels = ParseChannels(invocation.Arguments.GetValueOrDefault("channels"), settings.Channels);
@@ -98,8 +102,8 @@ public sealed class LightsController(
         {
             "lights.set" => await SetAsync(
                 string.Equals(invocation.Arguments.GetValueOrDefault("state"), "on", StringComparison.OrdinalIgnoreCase),
-                channels, failsafe, summary, ct),
-            "lights.off_for_video" => await OffForVideoAsync(channels, failsafe, summary, ct),
+                channels, failsafe, summary, ordered, ct),
+            "lights.off_for_video" => await OffForVideoAsync(channels, failsafe, summary, ordered, ct),
             _ => new ActionOutcome(false, summary, $"Unknown lights action '{definition.Id}'."),
         };
     }
@@ -117,7 +121,7 @@ public sealed class LightsController(
         try
         {
             outcome = await SetAsync(on, ParseChannels("all", settings.Channels), TimeSpan.Zero,
-                on ? "Manual: lights on" : "Manual: lights off", ct);
+                on ? "Manual: lights on" : "Manual: lights off", ordered: true, ct);
         }
         catch (FormatException ex)
         {
@@ -141,6 +145,7 @@ public sealed class LightsController(
         IReadOnlyList<int> channels,
         TimeSpan failsafe,
         string summary,
+        bool ordered,
         CancellationToken ct)
     {
         lock (_gate)
@@ -154,13 +159,14 @@ public sealed class LightsController(
             CancelPendingRestore();
         }
 
-        return await SwitchAsync(on, channels, failsafe > TimeSpan.Zero ? failsafe : null, summary, ct);
+        return await SwitchAsync(on, channels, failsafe > TimeSpan.Zero ? failsafe : null, summary, ordered, ct);
     }
 
     private async Task<ActionOutcome> OffForVideoAsync(
         IReadOnlyList<int> channels,
         TimeSpan failsafeMargin,
         string summary,
+        bool ordered,
         CancellationToken ct)
     {
         // What the layer shows right now, so the latch can tell the previous video from the new one.
@@ -172,13 +178,14 @@ public sealed class LightsController(
             CancelPendingRestore();
             _latch.Arm(DateTimeOffset.Now, baseline);
             _latchChannels = channels;
+            _latchOrdered = ordered;
             _failsafeMargin = failsafeMargin;
         }
 
         // Until the video's length is known, the relay's own timer is set to cover the search window,
         // so the lights still return if this app dies before the video is found.
         TimeSpan? toggleAfter = failsafeMargin > TimeSpan.Zero ? VideoLatch.GiveUpAfter + failsafeMargin : null;
-        var outcome = await SwitchAsync(false, channels, toggleAfter, summary, ct);
+        var outcome = await SwitchAsync(false, channels, toggleAfter, summary, ordered, ct);
 
         Updated?.Invoke();
         return outcome;
@@ -189,12 +196,14 @@ public sealed class LightsController(
     {
         LatchEvent latchEvent;
         IReadOnlyList<int> channels;
+        bool ordered;
         TimeSpan margin;
 
         lock (_gate)
         {
             latchEvent = _latch.Observe(sample, now);
             channels = _latchChannels;
+            ordered = _latchOrdered;
             margin = _failsafeMargin;
         }
 
@@ -209,8 +218,9 @@ public sealed class LightsController(
                 {
                     // Re-arm the relay's own timer now the real length is known. Switching an output
                     // that is already off is harmless.
+                    // The lights are already off, so there is no order to show.
                     _ = SwitchAsync(false, channels, TimeSpan.FromSeconds(remaining) + margin,
-                        $"Failsafe for '{video.Name}'", CancellationToken.None);
+                        $"Failsafe for '{video.Name}'", ordered: false, CancellationToken.None);
                 }
 
                 Updated?.Invoke();
@@ -218,18 +228,18 @@ public sealed class LightsController(
 
             case LatchEventKind.Ended:
                 activity.Info($"'{latchEvent.Video!.Name}' ended — {latchEvent.Reason}");
-                ScheduleRestore(channels, $"'{latchEvent.Video.Name}' ended");
+                ScheduleRestore(channels, ordered, $"'{latchEvent.Video.Name}' ended");
                 break;
 
             case LatchEventKind.GaveUp:
                 activity.Warning("Lights back on: " + latchEvent.Reason,
                     $"Check that this video plays on the {VideoLayer} layer, and look at the Activity page.");
-                ScheduleRestore(channels, "no video found");
+                ScheduleRestore(channels, ordered, "no video found");
                 break;
         }
     }
 
-    private void ScheduleRestore(IReadOnlyList<int> channels, string reason)
+    private void ScheduleRestore(IReadOnlyList<int> channels, bool ordered, string reason)
     {
         CancellationTokenSource cts;
         lock (_gate)
@@ -257,7 +267,7 @@ public sealed class LightsController(
                 _pendingRestore = null;
             }
 
-            var outcome = await SwitchAsync(true, channels, null, $"Lights on ({reason})", CancellationToken.None);
+            var outcome = await SwitchAsync(true, channels, null, $"Lights on ({reason})", ordered, CancellationToken.None);
             if (outcome.Success) activity.Success(outcome.Summary);
             else activity.Error($"{outcome.Summary} failed", outcome.Error);
         });
@@ -270,15 +280,41 @@ public sealed class LightsController(
         _pendingRestore = null;
     }
 
+    /// <param name="ordered">Follow the configured sequence; false switches every output together.</param>
     private async Task<ActionOutcome> SwitchAsync(
         bool on,
         IReadOnlyList<int> channels,
         TimeSpan? toggleAfter,
         string summary,
+        bool ordered,
         CancellationToken ct)
     {
         var settings = config.Current.Lights;
-        var results = await shelly.SetAsync(settings.Host, settings.Password, channels, on, toggleAfter, ct);
+
+        IReadOnlyList<LightStep> steps;
+        try
+        {
+            steps = ordered
+                ? LightSequence.Plan(settings.Sequence, channels, on)
+                : [new LightStep(TimeSpan.Zero, null, channels)];
+        }
+        catch (FormatException ex)
+        {
+            return new ActionOutcome(false, summary, "Settings → FOH lights → Order: " + ex.Message);
+        }
+
+        // Each step starts on schedule rather than after the previous one answers, so the gaps are
+        // the configured ones and not those plus the device's response time.
+        var clock = Stopwatch.StartNew();
+        var sent = new List<Task<IReadOnlyList<ShellySwitchResult>>>(steps.Count);
+        foreach (var step in steps)
+        {
+            var wait = step.At - clock.Elapsed;
+            if (wait > TimeSpan.Zero) await Task.Delay(wait, ct);
+            sent.Add(shelly.SetAsync(settings.Host, settings.Password, step.Channels, on, toggleAfter, ct));
+        }
+
+        var results = (await Task.WhenAll(sent)).SelectMany(r => r).ToList();
 
         lock (_gate)
         {

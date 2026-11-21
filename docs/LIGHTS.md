@@ -6,6 +6,7 @@ Gen2 relay such as the **Pro4PM**.
 - [The four cues](#the-four-cues)
 - [Setting up the Shelly](#setting-up-the-shelly)
 - [Setting up the cues](#setting-up-the-cues)
+- [Order: switching in batches](#order-switching-in-batches)
 - [How "lights off for this video" decides the video has ended](#how-lights-off-for-this-video-decides-the-video-has-ended)
 - [Failsafes](#failsafes)
 - [Troubleshooting](#troubleshooting)
@@ -63,6 +64,32 @@ state `off`.
 
 Any GPI numbers work; they just need to be ones no other rule uses. **Test fire** on each rule switches
 the real lights, so it's the quickest way to check the Shelly side.
+
+## Order: switching in batches
+
+By default every output switches together. To bring the lights up in stages, add groups under
+**Settings → FOH lights → Order**, for example:
+
+| Group | Outputs | Gap before |
+| --- | --- | --- |
+| Wides | `0,1` | — (first) |
+| Centers | `2,3` | 0.1s |
+
+**Turning on** goes top to bottom: Wides, then Centers 0.1s later. **Turning off** goes bottom to
+top with the same gaps: Centers, then Wides 0.1s later. Each group is one `Switch.SetMany` call, so
+the outputs within a group stay together. Gaps are timed from when each group is sent, so the
+device's response time doesn't stretch them.
+
+- **Every switch follows the order:** rules, the end-of-video restore, and the dashboard buttons.
+- **A rule can opt out:** set the action's **Order** to *all together* for a cue that should snap
+  everything at once.
+- **Outputs a rule asks for that are in no group** switch with the first group.
+- **Groups with none of the rule's outputs** are skipped, along with their gap.
+- **An output listed in two groups** is refused when you save.
+- **Gaps** run from 0 to 10 seconds.
+
+The relay's failsafe timer (see [Failsafes](#failsafes)) runs on the device, so if it ever fires,
+it brings the outputs back without the order.
 
 ## How "lights off for this video" decides the video has ended
 

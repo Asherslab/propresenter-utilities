@@ -94,6 +94,55 @@
         text in the configuration file below.
     </div>
 
+    <h3 style="margin-top: 1rem;">Order</h3>
+    <p class="hint">
+        Optional. Groups switch top to bottom when turning on, and bottom to top when turning off, with
+        the same gaps both ways. Outputs in no group switch with the first group. With no groups,
+        every output switches together. A trigger can still choose <em>all together</em>.
+    </p>
+
+    @if (_sequence.Count > 0)
+    {
+        <table>
+            <thead>
+                <tr><th>Group</th><th>Outputs</th><th>Gap before (s)</th><th></th></tr>
+            </thead>
+            <tbody>
+                @for (var i = 0; i < _sequence.Count; i++)
+                {
+                    var index = i;
+                    var group = _sequence[index];
+                    <tr>
+                        <td><input @bind="group.Name" placeholder="Wides" /></td>
+                        <td><input @bind="group.Channels" placeholder="0,1" style="width: 7rem;" /></td>
+                        <td>
+                            @if (index == 0)
+                            {
+                                <span class="hint">first</span>
+                            }
+                            else
+                            {
+                                <input type="number" step="0.05" min="0" max="10" @bind="group.DelayBeforeSeconds" style="width: 6rem;" />
+                            }
+                        </td>
+                        <td>
+                            <div class="row tight">
+                                <button class="small" disabled="@(index == 0)" @onclick="() => MoveGroup(index, -1)" title="Move up">↑</button>
+                                <button class="small" disabled="@(index == _sequence.Count - 1)" @onclick="() => MoveGroup(index, 1)" title="Move down">↓</button>
+                                <button class="small danger" @onclick="() => _sequence.RemoveAt(index)">Remove</button>
+                            </div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+
+    <div class="row" style="margin-top: 0.5rem;">
+        <button class="small" @onclick="AddGroup">Add group</button>
+        <span class="hint">Save above to apply.</span>
+    </div>
+
     @if (_lightsResult is not null)
     {
         <div class="warning-banner" style="margin-top: 0.75rem; @(_lightsOk ? "border-color: rgba(56,184,124,0.4); background: rgba(56,184,124,0.12); color: var(--ok);" : "")">
@@ -168,6 +217,9 @@
     private string? _lightsResult;
     private bool _lightsOk;
 
+    // Edited copies: the live settings change only on Save.
+    private List<LightGroup> _sequence = [];
+
     protected override void OnInitialized()
     {
         _host = Config.Current.Connection.Host;
@@ -178,10 +230,55 @@
         _lightsHost = lights.Host;
         _lightsPassword = lights.Password;
         _lightsChannels = lights.Channels;
+        _sequence = lights.Sequence.Select(g => g with { }).ToList();
+    }
+
+    private void AddGroup() =>
+        _sequence.Add(new LightGroup { Name = $"Group {_sequence.Count + 1}", DelayBeforeSeconds = _sequence.Count == 0 ? 0 : 0.1 });
+
+    private void MoveGroup(int index, int by)
+    {
+        var target = index + by;
+        if (target < 0 || target >= _sequence.Count) return;
+        (_sequence[index], _sequence[target]) = (_sequence[target], _sequence[index]);
+    }
+
+    /// <summary>A problem with the order that should stop it being saved, or null.</summary>
+    private string? ValidateSequence()
+    {
+        var seen = new Dictionary<int, string>();
+        foreach (var group in _sequence)
+        {
+            var name = string.IsNullOrWhiteSpace(group.Name) ? "(unnamed group)" : group.Name.Trim();
+            IReadOnlyList<int> outputs;
+            try
+            {
+                outputs = LightSequence.ParseGroup(group);
+            }
+            catch (FormatException ex)
+            {
+                return $"Order, {name}: {ex.Message}";
+            }
+
+            if (outputs.Count == 0) return $"Order, {name}: list the outputs it switches, e.g. 0,1.";
+            foreach (var output in outputs)
+            {
+                if (!seen.TryAdd(output, name)) return $"Order: output {output} is in both {seen[output]} and {name}.";
+            }
+        }
+
+        return null;
     }
 
     private void SaveLights()
     {
+        if (ValidateSequence() is { } problem)
+        {
+            _lightsOk = false;
+            _lightsResult = problem + " Nothing was saved.";
+            return;
+        }
+
         Config.Update(c => c with
         {
             Lights = new LightsSettings
@@ -190,6 +287,7 @@
                 Host = _lightsHost.Trim(),
                 Password = string.IsNullOrEmpty(_lightsPassword) ? null : _lightsPassword,
                 Channels = string.IsNullOrWhiteSpace(_lightsChannels) ? "0,1,2,3" : _lightsChannels.Trim(),
+                Sequence = _sequence.Select(g => g with { Name = g.Name.Trim(), Channels = g.Channels.Trim() }).ToList(),
             },
         });
         _lightsResult = null;
@@ -199,6 +297,8 @@
     private async Task TestLights()
     {
         SaveLights();
+        if (_lightsResult is not null) return; // the order did not validate, and that message matters more
+
         if (string.IsNullOrWhiteSpace(_lightsHost))
         {
             _lightsOk = false;
