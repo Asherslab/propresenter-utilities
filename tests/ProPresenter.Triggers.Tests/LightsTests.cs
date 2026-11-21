@@ -32,6 +32,38 @@ public class LightsTests
     }
 
     [Fact]
+    public void Several_outputs_go_in_one_SetMany_request()
+    {
+        Assert.Equal(
+            """{"id":1,"method":"Switch.SetMany","params":{"ids":[0,1,2,3],"on":false,"toggle_after":46}}""",
+            ShellyClient.BuildSetManyRequest([0, 1, 2, 3], on: false, TimeSpan.FromSeconds(45.2)));
+
+        Assert.Equal(
+            """{"id":1,"method":"Switch.SetMany","params":{"ids":[0,1],"on":true}}""",
+            ShellyClient.BuildSetManyRequest([0, 1], on: true, toggleAfter: null));
+    }
+
+    [Fact]
+    public void SetMany_results_map_to_outputs_in_order()
+    {
+        var results = ShellyClient.ParseSetManyResponse([0, 1, 2], 200,
+            """{"id":1,"src":"shellypro4pm","result":{"results":[null,{"code":-105,"message":"id 1 not found"},null]}}""");
+
+        Assert.NotNull(results);
+        Assert.Equal([true, false, true], results!.Select(r => r.Success));
+        Assert.Equal("id 1 not found", results[1].Error);
+    }
+
+    [Theory]
+    [InlineData(404, """{"id":1,"src":"shellypro4pm","error":{"code":404,"message":"No handler for Switch.SetMany"}}""")]
+    [InlineData(200, """{"id":1,"src":"shellypro4pm","error":{"code":-114,"message":"Method Switch.SetMany failed"}}""")]
+    [InlineData(501, "<html>Not implemented</html>")]
+    public void Firmware_without_SetMany_falls_back(int status, string body)
+    {
+        Assert.Null(ShellyClient.ParseSetManyResponse([0, 1, 2, 3], status, body));
+    }
+
+    [Fact]
     public void All_means_the_configured_outputs()
     {
         Assert.Equal([0, 1, 2, 3], LightsController.ParseChannels("all", "0,1,2,3"));

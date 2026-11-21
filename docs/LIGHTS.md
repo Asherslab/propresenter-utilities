@@ -92,12 +92,12 @@ usually means the video isn't on the presentation layer; see Troubleshooting.
 
 **Lights off for this video** has a **Failsafe margin**, `0` (off) by default. When set, the relay
 itself is told to switch back on at *remaining time + margin* once the video's length is known (via
-`toggle_after` on `Switch.Set`). The timer runs on the Shelly, not in this app. So if this machine,
+`toggle_after` on the switch command). The timer runs on the Shelly, not in this app. So if this machine,
 the network or ProPresenter fails mid-video, the room still comes back up. Until the video is found,
 the relay timer is 15s + margin.
 
 > **Confirm the relay's behaviour before turning this on.** Every command this app sends is an
-> explicit `Switch.Set` with `on=true` or `on=false`, never a toggle. `toggle_after`, though, is a
+> explicit set with `on=true` or `on=false`, never a toggle. `toggle_after`, though, is a
 > timer on the device, and Shelly's documentation doesn't say whether it switches back to *on* or
 > toggles whatever state the output is in. It also doesn't say whether turning the lights on early
 > (from this app, the Shelly app or the wall input) cancels it. If it toggles and isn't cancelled,
@@ -134,6 +134,12 @@ video set to *Loop* never ends; one set to *Stop* or *Clear* does. The Activity 
 
 **401 Unauthorized.** Authentication is on in the Shelly and the password in Settings is missing or
 wrong. The user name is always `admin` on Shelly Gen2 devices.
+
+**The outputs don't switch at the same moment.** The app switches all of them in one
+`Switch.SetMany` call. If the device's firmware doesn't have that method, the log says "has no
+Switch.SetMany", and the app falls back to one request per output, which the device may serve a
+couple at a time. Update the Shelly's firmware to fix it. If they still differ with `SetMany` in
+use, the difference is in the fixtures or their drivers, not the switching.
 
 **One output did not switch.** The Activity page lists failures per output. Check **Outputs for
 "all"** against the outputs the device actually has.

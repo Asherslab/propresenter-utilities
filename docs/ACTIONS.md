@@ -232,7 +232,8 @@ rules can still be written offline; anywhere a name, index or UUID is accepted, 
 ### FOH lights
 
 These two are not ProPresenter calls. They switch the Shelly relay set up under **Settings → FOH
-lights**, using its `Switch.Set` RPC. See [LIGHTS.md](LIGHTS.md).
+lights**, using its `Switch.SetMany` RPC so all outputs change together (or `Switch.Set` per
+output on firmware without it). See [LIGHTS.md](LIGHTS.md).
 
 | Action | What it does |
 | --- | --- |
