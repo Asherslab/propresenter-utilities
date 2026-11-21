@@ -111,6 +111,36 @@ find_legacy_agents() {
     done
 }
 
+# Says what is holding the control panel's port, for when the installer has to refuse.
+describe_port_holder() {
+    local url port pids pid f found=0
+    url="$(health_url)"
+    port="${url##*:}"
+    port="${port%%/*}"
+
+    if command -v lsof >/dev/null; then
+        pids="$(lsof -nP -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+        for pid in $pids; do
+            found=1
+            printf '    pid %s, user %s: %s\n' "$pid" "$(ps -o user= -p "$pid" | tr -d ' ')" "$(ps -o command= -p "$pid")" >&2
+        done
+    fi
+    if [ "$found" = 0 ]; then
+        printf '    a process this user cannot see, so probably one running as another user or root.\n' >&2
+        printf '    sudo lsof -nP -iTCP:%s -sTCP:LISTEN   shows which.\n' "$port" >&2
+    fi
+
+    # System-wide agents and daemons need sudo to change, so they are reported rather than replaced.
+    if [ "$OS" = osx ]; then
+        for f in /Library/LaunchAgents/*.plist /Library/LaunchDaemons/*.plist; do
+            [ -f "$f" ] || continue
+            if $PB -c 'Print :ProgramArguments' "$f" 2>/dev/null | grep -qE '/ProPresenter\.App(\.dll)?$'; then
+                printf '    system-wide service running this app: %s\n' "$f" >&2
+            fi
+        done
+    fi
+}
+
 # Where replaced agents' plists are parked: outside the install directory, so --uninstall keeps them,
 # and outside LaunchAgents, so launchd does not load them at the next login.
 PARKED="$HOME/Library/Application Support/propresenter-utilities/replaced-agents"
@@ -361,7 +391,9 @@ install() {
         # an IDE, or a service under another service manager.
         restore_legacy
         [ -n "$previous" ] && start_service
-        die "Something else is already serving $(health_url). Stop it and re-run."
+        warn "Something else is already serving $(health_url):"
+        describe_port_holder
+        die "Nothing was changed. Stop that and re-run."
     fi
 
     ln -sfn "versions/$TAG" "$INSTALL_DIR/current"
