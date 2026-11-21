@@ -36,9 +36,10 @@ public sealed class LightsController(
 
     /// <summary>
     /// How long an ended video waits before the lights come up. A video cut straight into another
-    /// lights-off video re-arms within this window, so the room does not flash.
+    /// lights-off video re-arms within this window, so the room does not flash. Kept short because it
+    /// is felt in the room: the next cue's macro arrives over RossTalk within milliseconds.
     /// </summary>
-    internal static readonly TimeSpan RestoreDelay = TimeSpan.FromSeconds(1.5);
+    internal static readonly TimeSpan RestoreDelay = TimeSpan.FromSeconds(0.3);
 
     private readonly Lock _gate = new();
     private readonly VideoLatch _latch = new();
