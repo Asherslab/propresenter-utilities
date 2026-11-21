@@ -35,7 +35,7 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     throw "This script must be run from an elevated PowerShell session."
 }
 
-$exe = Join-Path $InstallPath "ProPresenter.App.exe"
+$exe = Join-Path $InstallPath "propresenter-utilities.exe"
 if (-not (Test-Path $exe)) {
     throw "Could not find $exe. Publish the app to $InstallPath first."
 }

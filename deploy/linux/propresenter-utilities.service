@@ -16,7 +16,7 @@ Wants=network-online.target
 [Service]
 # The host calls UseSystemd(), so it reports readiness properly under Type=notify.
 Type=notify
-ExecStart=/opt/propresenter-utilities/ProPresenter.App
+ExecStart=/opt/propresenter-utilities/propresenter-utilities
 WorkingDirectory=/opt/propresenter-utilities
 
 User=propresenter

@@ -78,7 +78,8 @@ The installer refuses to run as root without `--system`, since a per-user servic
 never what's meant.
 
 **Replacing an existing install (macOS).** The installer looks in `~/Library/LaunchAgents` (or, with
-`--system`, `/Library/LaunchDaemons`) for any other agent that runs `ProPresenter.App` or `ProPresenter.App.dll`, for example one created by hand
+`--system`, `/Library/LaunchDaemons`) for any other agent that runs this app (`propresenter-utilities`, or `ProPresenter.App` /
+`ProPresenter.App.dll` from earlier builds), for example one created by hand
 or by an IDE deployment. It then:
 
 1. Takes that agent's `--urls`/`--config` settings, from its environment or arguments. If it sets no
@@ -134,7 +135,7 @@ dotnet publish src/ProPresenter.App -c Release -o /path/to/install
 ```
 
 That produces a framework-dependent build, which needs the .NET 10 runtime on the target machine and
-is started with `dotnet ProPresenter.App.dll`.
+is started with `dotnet propresenter-utilities.dll`.
 
 To avoid installing a runtime on the production machine, publish self-contained for its platform:
 
@@ -143,11 +144,12 @@ dotnet publish src/ProPresenter.App -c Release -r osx-arm64 --self-contained -o 
 ```
 
 Use `osx-arm64` (Apple Silicon), `osx-x64` (Intel Mac), `win-x64`, or `linux-x64`. The result is
-started by running the `ProPresenter.App` executable directly.
+started by running the `propresenter-utilities` executable directly. (It isn't called
+`ProPresenter.App` like the project, because macOS kills any executable whose name ends in `.App`.)
 
 > Adding `-p:PublishSingleFile=true` collapses the output into one file. On macOS an unsigned
 > single-file bundle is killed by the OS on launch; sign it with `codesign -s - --force
-> ./ProPresenter.App` if you use that option. The plain self-contained publish above avoids the issue
+> ./propresenter-utilities` if you use that option. The plain self-contained publish above avoids the issue
 > and is the recommended path.
 
 Pick an install location the service account can read, for example:
@@ -233,7 +235,7 @@ Run these in an **elevated** PowerShell:
 New-Service -Name "ProPresenterUtilities" `
   -DisplayName "ProPresenter Utilities" `
   -Description "Fires ProPresenter cues from timer triggers." `
-  -BinaryPathName '"C:\Program Files\ProPresenter Utilities\ProPresenter.App.exe" --config "C:\ProgramData\propresenter-utilities\config.json"' `
+  -BinaryPathName '"C:\Program Files\ProPresenter Utilities\propresenter-utilities.exe" --config "C:\ProgramData\propresenter-utilities\config.json"' `
   -StartupType Automatic
 
 Start-Service ProPresenterUtilities
@@ -261,7 +263,7 @@ Get-EventLog -LogName Application -Source "ProPresenter Utilities" -Newest 20
 ```
 
 For a framework-dependent build, point `-BinaryPathName` at
-`"C:\Program Files\dotnet\dotnet.exe" "C:\Program Files\ProPresenter Utilities\ProPresenter.App.dll"`.
+`"C:\Program Files\dotnet\dotnet.exe" "C:\Program Files\ProPresenter Utilities\propresenter-utilities.dll"`.
 
 ## Linux — systemd
 

@@ -21,7 +21,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/propresenter-utilities/ProPresenter.App</string>
+        <string>/usr/local/propresenter-utilities/propresenter-utilities</string>
     </array>
 
     <key>EnvironmentVariables</key>

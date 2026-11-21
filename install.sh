@@ -27,7 +27,10 @@ REPO="Asherslab/propresenter-utilities"
 RELEASES="${PROPRESENTER_UTILITIES_RELEASES:-https://github.com/$REPO/releases}"
 LABEL="com.propresenter.utilities"
 UNIT="propresenter-utilities"
-EXE="ProPresenter.App"
+EXE="propresenter-utilities"
+# Matches a ProgramArguments entry that runs this app: today's executable, or the ProPresenter.App(.dll)
+# name earlier builds and hand-made installs used.
+APP_ARG='/(propresenter-utilities|ProPresenter\.App)(\.dll)?$'
 
 say() { printf '\033[1m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[33mwarning:\033[0m %s\n' "$*" >&2; }
@@ -117,7 +120,8 @@ read_settings_from() {
             --config=*) [ -n "$CONFIG" ] || CONFIG="${arg#--config=}" ;;
         esac
         case "$arg" in
-            */ProPresenter.App | */ProPresenter.App.dll) appdir="${arg%/*}" ;;
+            */ProPresenter.App | */ProPresenter.App.dll | */propresenter-utilities | */propresenter-utilities.dll)
+                appdir="${arg%/*}" ;;
         esac
         i=$((i + 1))
     done
@@ -181,7 +185,7 @@ find_legacy_agents() {
     for f in "$AGENTS_DIR"/*.plist; do
         [ -f "$f" ] && [ "$f" != "$PLIST" ] || continue
         [ "$($PB -c 'Print :Label' "$f" 2>/dev/null || true)" != "$LABEL" ] || continue
-        if $PB -c 'Print :ProgramArguments' "$f" 2>/dev/null | grep -qE '/ProPresenter\.App(\.dll)?$'; then
+        if $PB -c 'Print :ProgramArguments' "$f" 2>/dev/null | grep -qE "$APP_ARG"; then
             LEGACY="$LEGACY$f"$'\n'
         fi
     done
@@ -215,7 +219,7 @@ describe_port_holder() {
     if [ "$OS" = osx ]; then
         for f in /Library/LaunchAgents/*.plist /Library/LaunchDaemons/*.plist; do
             [ -f "$f" ] || continue
-            if [ "$f" != "$PLIST" ] && $PB -c 'Print :ProgramArguments' "$f" 2>/dev/null | grep -qE '/ProPresenter\.App(\.dll)?$'; then
+            if [ "$f" != "$PLIST" ] && $PB -c 'Print :ProgramArguments' "$f" 2>/dev/null | grep -qE "$APP_ARG"; then
                 printf '    system-wide service running this app: %s\n' "$f" >&2
                 if [ "$SYSTEM" = 0 ]; then
                     printf '    to replace it, install as a system service instead: ... | sudo bash -s -- --system\n' >&2
