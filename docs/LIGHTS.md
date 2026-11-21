@@ -96,22 +96,19 @@ itself is told to switch back on at *remaining time + margin* once the video's l
 the network or ProPresenter fails mid-video, the room still comes back up. Until the video is found,
 the relay timer is 15s + margin.
 
-> **Confirm the relay's behaviour before turning this on.** Every command this app sends is an
-> explicit set with `on=true` or `on=false`, never a toggle. `toggle_after`, though, is a
-> timer on the device, and Shelly's documentation doesn't say whether it switches back to *on* or
-> toggles whatever state the output is in. It also doesn't say whether turning the lights on early
-> (from this app, the Shelly app or the wall input) cancels it. If it toggles and isn't cancelled,
-> turning the lights on early would make the timer turn them **off** later. Check on the device:
+> **Turning the lights on early cancels the failsafe.** Every command this app sends is an explicit
+> set with `on=true` or `on=false`, never a toggle. A set without `toggle_after` clears any running
+> timer, so lights switched on early (by this app, or anything else using `Switch.Set` or
+> `Switch.SetMany`) can't be switched off later by an old failsafe. Verified on a Pro4PM running
+> firmware 2.2.0: an output turned off with `toggle_after=600` showed a 600-second timer, and a plain
+> `on` removed it. Shelly's documentation doesn't say whether a physical input does the same, so if
+> the Pro4PM's inputs are wired to wall switches, check that once:
 >
 > ```bash
 > curl "http://IP/rpc/Switch.Set?id=0&on=false&toggle_after=30"
-> curl "http://IP/rpc/Switch.GetStatus?id=0"   # shows "timer_type":"toggle_after"
-> curl "http://IP/rpc/Switch.Set?id=0&on=true"
-> curl "http://IP/rpc/Switch.GetStatus?id=0"   # timer fields gone = cancelled
+> # turn output 0 on at the wall switch, then:
+> curl "http://IP/rpc/Switch.GetStatus?id=0"   # no timer_* fields = cancelled
 > ```
->
-> Then wait 30s and confirm the output is still on. Repeat, turning it on from the Shelly app or wall
-> input instead of the third command.
 
 Pausing a video for longer than the margin lets the failsafe bring the lights up. That's deliberate:
 it errs on the side of light.
@@ -136,10 +133,11 @@ video set to *Loop* never ends; one set to *Stop* or *Clear* does. The Activity 
 wrong. The user name is always `admin` on Shelly Gen2 devices.
 
 **The outputs don't switch at the same moment.** The app switches all of them in one
-`Switch.SetMany` call. If the device's firmware doesn't have that method, the log says "has no
-Switch.SetMany", and the app falls back to one request per output, which the device may serve a
-couple at a time. Update the Shelly's firmware to fix it. If they still differ with `SetMany` in
-use, the difference is in the fixtures or their drivers, not the switching.
+`Switch.SetMany` call. On a Pro4PM that needs firmware **2.2.0 or newer**: 1.6.0 and 2.1.1 don't have
+the method. Without it the app logs "has no Switch.SetMany" and falls back to one request per output.
+The device serves those a couple at a time, so on older firmware the outputs can change in pairs up
+to a few seconds apart. Update the firmware from the Shelly's web UI. If the outputs still differ
+with `SetMany` in use, the difference is in the fixtures or their drivers, not the switching.
 
 **One output did not switch.** The Activity page lists failures per output. Check **Outputs for
 "all"** against the outputs the device actually has.
