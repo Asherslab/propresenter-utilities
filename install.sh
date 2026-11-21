@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 #
 # Installs or updates ProPresenter Utilities from the latest GitHub release, and runs it as a
-# per-user service: a LaunchAgent on macOS, a systemd user unit on Linux.
+# service: by default a per-user LaunchAgent (macOS) or systemd user unit (Linux); with --system a
+# LaunchDaemon or system unit that starts at boot.
 #
 #   curl -fsSL https://raw.githubusercontent.com/Asherslab/propresenter-utilities/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/Asherslab/propresenter-utilities/main/install.sh | sudo bash -s -- --system
 #
-# Run it again to update. Options (with curl | bash, pass them as: bash -s -- --force):
+# Run it again (the same way) to update. Options (with curl | bash, pass them as: bash -s -- --force):
 #
+#   --system           install as a system service (run with sudo); runs as root, starts at boot
 #   --version vX.Y.Z   install a specific release instead of the latest
 #   --force            reinstall even if that version is already installed
 #   --urls URL         address the control panel listens on (default http://127.0.0.1:8752)
-#   --config PATH      configuration file (default ~/.config/propresenter-utilities/config.json)
+#   --config PATH      configuration file (default: the existing install's, else per mode)
 #   --dir PATH         install directory
 #   --uninstall        stop and remove the service and the app; the configuration file is kept
 #
@@ -48,15 +51,46 @@ detect_platform() {
     RID="$OS-$ARCH"
     ASSET="propresenter-utilities-$RID.tar.gz"
 
-    if [ "$OS" = osx ]; then
+    if [ "$SYSTEM" = 1 ] && [ "$(id -u)" != 0 ]; then
+        die "--system needs root: curl -fsSL <installer url> | sudo bash -s -- --system"
+    fi
+    if [ "$SYSTEM" = 0 ] && [ "$(id -u)" = 0 ]; then
+        # A per-user service for root would land in /var/root and never be what was meant.
+        die "Running as root. Run as the user the service should belong to, or pass --system."
+    fi
+
+    if [ "$OS" = osx ] && [ "$SYSTEM" = 1 ]; then
+        DOMAIN="system"
+        AGENTS_DIR="/Library/LaunchDaemons"
+        PARKED="/Library/Application Support/propresenter-utilities/replaced-agents"
+        DEFAULT_DIR="/usr/local/propresenter-utilities"
+        DEFAULT_CONFIG="/Library/Application Support/propresenter-utilities/config.json"
+        LOG="/Library/Logs/propresenter-utilities.log"
+    elif [ "$OS" = osx ]; then
+        DOMAIN="gui/$(id -u)"
+        AGENTS_DIR="$HOME/Library/LaunchAgents"
+        # Outside the install directory, so --uninstall keeps them, and outside LaunchAgents, so
+        # launchd does not load them at the next login.
+        PARKED="$HOME/Library/Application Support/propresenter-utilities/replaced-agents"
         DEFAULT_DIR="$HOME/Applications/propresenter-utilities"
-        PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+        DEFAULT_CONFIG="$HOME/.config/propresenter-utilities/config.json"
         LOG="$HOME/Library/Logs/propresenter-utilities.log"
+    elif [ "$SYSTEM" = 1 ]; then
+        DEFAULT_DIR="/opt/propresenter-utilities"
+        DEFAULT_CONFIG="/var/lib/propresenter-utilities/config.json"
+        UNIT_FILE="/etc/systemd/system/$UNIT.service"
     else
         DEFAULT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/propresenter-utilities"
+        DEFAULT_CONFIG="$HOME/.config/propresenter-utilities/config.json"
         UNIT_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$UNIT.service"
     fi
+    if [ "$OS" = osx ]; then PLIST="$AGENTS_DIR/$LABEL.plist"; fi
+    JOURNAL=""
+    if [ -n "$UNIT_FILE" ]; then JOURNAL="$(journal_hint)"; fi
 }
+
+sctl() { if [ "$SYSTEM" = 1 ]; then systemctl "$@"; else systemctl --user "$@"; fi; }
+journal_hint() { if [ "$SYSTEM" = 1 ]; then echo "journalctl -u $UNIT"; else echo "journalctl --user -u $UNIT"; fi; }
 
 sha256() {
     if command -v sha256sum >/dev/null; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi
@@ -85,24 +119,42 @@ read_settings_from() {
     done
 }
 
+# Where the app itself would have put its config, running under that plist with no --config: in the
+# home directory of the user it runs as (UserName, or root for a daemon without one).
+implied_config() {
+    local plist="$1" user home
+    user="$($PB -c 'Print :UserName' "$plist" 2>/dev/null || true)"
+    if [ -z "$user" ]; then
+        if [ "$SYSTEM" = 1 ]; then user=root; else user="$(id -un)"; fi
+    fi
+    home="$(dscl . -read "/Users/$user" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+    [ -n "$home" ] || return 0
+    echo "$home/.config/propresenter-utilities/config.json"
+}
+
 read_existing_settings() {
     [ "$OS" = osx ] || return 0
     if [ -f "$PLIST" ]; then read_settings_from "$PLIST"; fi
 
     local f
     while IFS= read -r f; do
-        if [ -n "$f" ]; then read_settings_from "$f"; fi
+        [ -n "$f" ] || continue
+        read_settings_from "$f"
+        if [ -z "$CONFIG" ]; then
+            CONFIG="$(implied_config "$f")"
+            CONFIG_FROM_LEGACY="$f"
+        fi
     done <<<"$LEGACY"
 }
 
-# LaunchAgents that run this app under a label other than ours: an install made by hand, or one
-# deployed from an IDE. Left running, they would hold the same ports as the service installed here.
+# Agents (or, with --system, daemons) that run this app under a label other than ours: an install
+# made by hand, or one deployed from an IDE. Left running, they would hold the same ports.
 # Newline-separated, because macOS's bash 3.2 cannot expand an empty array under `set -u`.
 find_legacy_agents() {
     LEGACY=""
     [ "$OS" = osx ] || return 0
     local f
-    for f in "$HOME"/Library/LaunchAgents/*.plist; do
+    for f in "$AGENTS_DIR"/*.plist; do
         [ -f "$f" ] && [ "$f" != "$PLIST" ] || continue
         [ "$($PB -c 'Print :Label' "$f" 2>/dev/null || true)" != "$LABEL" ] || continue
         if $PB -c 'Print :ProgramArguments' "$f" 2>/dev/null | grep -qE '/ProPresenter\.App(\.dll)?$'; then
@@ -139,8 +191,11 @@ describe_port_holder() {
     if [ "$OS" = osx ]; then
         for f in /Library/LaunchAgents/*.plist /Library/LaunchDaemons/*.plist; do
             [ -f "$f" ] || continue
-            if $PB -c 'Print :ProgramArguments' "$f" 2>/dev/null | grep -qE '/ProPresenter\.App(\.dll)?$'; then
+            if [ "$f" != "$PLIST" ] && $PB -c 'Print :ProgramArguments' "$f" 2>/dev/null | grep -qE '/ProPresenter\.App(\.dll)?$'; then
                 printf '    system-wide service running this app: %s\n' "$f" >&2
+                if [ "$SYSTEM" = 0 ]; then
+                    printf '    to replace it, install as a system service instead: ... | sudo bash -s -- --system\n' >&2
+                fi
             fi
         done
     fi
@@ -149,19 +204,15 @@ describe_port_holder() {
 # Re-bootstrapping straight after a bootout can fail transiently with an I/O error, so retry.
 bootstrap_agent() {
     for _ in 1 2 3 4 5; do
-        launchctl bootstrap "gui/$(id -u)" "$1" 2>/dev/null && return 0
+        launchctl bootstrap "$DOMAIN" "$1" 2>/dev/null && return 0
         sleep 1
     done
     return 1
 }
 
-# Where replaced agents' plists are parked: outside the install directory, so --uninstall keeps them,
-# and outside LaunchAgents, so launchd does not load them at the next login.
-PARKED="$HOME/Library/Application Support/propresenter-utilities/replaced-agents"
-
 wait_unloaded() {
     for _ in $(seq 1 20); do
-        launchctl print "gui/$(id -u)/$1" >/dev/null 2>&1 || return 0
+        launchctl print "$DOMAIN/$1" >/dev/null 2>&1 || return 0
         sleep 0.5
     done
 }
@@ -174,7 +225,7 @@ retire_legacy() {
         [ -n "$f" ] || continue
         label="$($PB -c 'Print :Label' "$f" 2>/dev/null || true)"
         say "Replacing the existing install '$label' ($(basename "$f"))"
-        launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+        launchctl bootout "$DOMAIN/$label" 2>/dev/null || true
         wait_unloaded "$label"
         mkdir -p "$PARKED"
         mv -f "$f" "$PARKED/"
@@ -193,20 +244,20 @@ restore_legacy() {
     while IFS= read -r name; do
         [ -n "$name" ] || continue
         warn "Restoring the previous install ($name)"
-        mv -f "$PARKED/$name" "$HOME/Library/LaunchAgents/$name"
-        bootstrap_agent "$HOME/Library/LaunchAgents/$name" \
-            || warn "Could not start it again; it will start at next login, or run: launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/$name"
+        mv -f "$PARKED/$name" "$AGENTS_DIR/$name"
+        bootstrap_agent "$AGENTS_DIR/$name" \
+            || warn "Could not start it again. Run: launchctl bootstrap $DOMAIN '$AGENTS_DIR/$name'"
     done <<<"$RETIRED"
     RETIRED=""
 }
 
 stop_service() {
     if [ "$OS" = osx ]; then
-        launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+        launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
         # bootout returns before the process has always gone.
         wait_unloaded "$LABEL"
     else
-        systemctl --user stop "$UNIT" 2>/dev/null || true
+        sctl stop "$UNIT" 2>/dev/null || true
     fi
 }
 
@@ -250,6 +301,8 @@ write_service() {
 </dict>
 </plist>
 EOF
+        # launchd refuses daemon plists that are group- or world-writable.
+        chmod 644 "$PLIST"
     else
         mkdir -p "$(dirname "$UNIT_FILE")"
         cat >"$UNIT_FILE" <<EOF
@@ -269,9 +322,9 @@ Restart=always
 RestartSec=5
 
 [Install]
-WantedBy=default.target
+WantedBy=$([ "$SYSTEM" = 1 ] && echo multi-user.target || echo default.target)
 EOF
-        systemctl --user daemon-reload
+        sctl daemon-reload
     fi
 }
 
@@ -279,8 +332,8 @@ start_service() {
     if [ "$OS" = osx ]; then
         bootstrap_agent "$PLIST" || die "launchctl could not load $PLIST"
     else
-        systemctl --user enable "$UNIT" >/dev/null 2>&1
-        systemctl --user restart "$UNIT"
+        sctl enable "$UNIT" >/dev/null 2>&1
+        sctl restart "$UNIT"
     fi
 }
 
@@ -314,9 +367,9 @@ uninstall() {
     if [ "$OS" = osx ]; then
         rm -f -- "${PLIST:?}"
     else
-        systemctl --user disable "$UNIT" >/dev/null 2>&1 || true
+        sctl disable "$UNIT" >/dev/null 2>&1 || true
         rm -f -- "${UNIT_FILE:?}"
-        systemctl --user daemon-reload
+        sctl daemon-reload
     fi
     # Only what install() creates, never the directory wholesale: --dir pointed at the wrong place
     # must not be able to take anything else with it.
@@ -360,12 +413,17 @@ install() {
         # Still clear out another install that has appeared since, e.g. an IDE redeploying.
         if [ -n "$LEGACY" ]; then
             retire_legacy
-            launchctl kickstart -k "gui/$(id -u)/$LABEL" 2>/dev/null || true
+            launchctl kickstart -k "$DOMAIN/$LABEL" 2>/dev/null || true
         fi
         return
     fi
 
+    if [ -n "$CONFIG_FROM_LEGACY" ] && [ ! -f "$CONFIG" ]; then
+        die "The existing install ($(basename "$CONFIG_FROM_LEGACY")) should keep its rules in $CONFIG, but there is no file there. Find it and pass --config PATH. Nothing was changed."
+    fi
+
     say "Installing $TAG ($RID)${installed:+, replacing $installed}"
+    if [ -n "$CONFIG_FROM_LEGACY" ]; then say "Keeping the existing rules in $CONFIG"; fi
 
     TMP="$(mktemp -d)"
     trap 'rm -rf -- "${TMP:?}"' EXIT
@@ -421,14 +479,14 @@ install() {
         ln -sfn "$previous" "$INSTALL_DIR/current"
         rm -rf -- "${target:?}"
         start_service
-        die "Update failed. ${LOG:+See $LOG}${UNIT_FILE:+See journalctl --user -u $UNIT}"
+        die "Update failed. ${LOG:+See $LOG}${UNIT_FILE:+See $JOURNAL}"
     else
         # First install, nothing of ours to fall back to: remove it, so it cannot compete with the
         # install it was replacing, and put that back.
         stop_service
         if [ "$OS" = osx ]; then rm -f -- "${PLIST:?}"; fi
         restore_legacy
-        die "$TAG did not respond on $(health_url). ${LOG:+See $LOG}${UNIT_FILE:+See journalctl --user -u $UNIT}"
+        die "$TAG did not respond on $(health_url). ${LOG:+See $LOG}${UNIT_FILE:+See $JOURNAL}"
     fi
 
     # Keep the live version and the one before it, for a manual rollback.
@@ -439,13 +497,14 @@ install() {
         [ "$name" = "$TAG" ] || [ "$name" = "$keep_prev" ] || rm -rf -- "$dir"
     done
 
-    if [ "$OS" = linux ] && ! loginctl show-user "$USER" -p Linger 2>/dev/null | grep -q yes; then
+    if [ "$OS" = linux ] && [ "$SYSTEM" = 0 ] && ! loginctl show-user "$USER" -p Linger 2>/dev/null | grep -q yes; then
         warn "To start at boot without logging in, run: sudo loginctl enable-linger $USER"
     fi
 }
 
 main() {
-    TAG="" FORCE=0 UNINSTALL=0 URLS="" CONFIG="" INSTALL_DIR="" LEGACY="" RETIRED=""
+    TAG="" FORCE=0 UNINSTALL=0 SYSTEM=0 URLS="" CONFIG="" INSTALL_DIR="" LEGACY="" RETIRED=""
+    CONFIG_FROM_LEGACY="" UNIT_FILE="" LOG="" DOMAIN="" AGENTS_DIR="" PARKED=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --version) TAG="${2:?--version needs a tag}"; shift 2 ;;
@@ -454,7 +513,8 @@ main() {
             --config) CONFIG="${2:?--config needs a path}"; shift 2 ;;
             --dir) INSTALL_DIR="${2:?--dir needs a path}"; shift 2 ;;
             --uninstall) UNINSTALL=1; shift ;;
-            -h | --help) sed -n '2,20p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
+            --system) SYSTEM=1; shift ;;
+            -h | --help) sed -n '2,23p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
             *) die "Unknown option $1" ;;
         esac
     done
@@ -464,7 +524,7 @@ main() {
     read_existing_settings
     INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_DIR}"
     URLS="${URLS:-http://127.0.0.1:8752}"
-    CONFIG="${CONFIG:-$HOME/.config/propresenter-utilities/config.json}"
+    CONFIG="${CONFIG:-$DEFAULT_CONFIG}"
 
     if [ "$UNINSTALL" = 1 ]; then uninstall; else install; fi
 }

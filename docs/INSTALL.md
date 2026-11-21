@@ -53,12 +53,39 @@ Options go after `bash -s --`, for example `curl -fsSL … | bash -s -- --urls h
 An update keeps the `--urls` and `--config` values the existing LaunchAgent was installed with, so
 they only need passing once.
 
-**Replacing an existing install (macOS).** The installer looks in `~/Library/LaunchAgents` for any
-other agent that runs `ProPresenter.App` or `ProPresenter.App.dll`, for example one created by hand
+### As a system service (`--system`)
+
+To run it as a LaunchDaemon that starts at boot, without anyone logged in, install and update with
+`sudo` and `--system`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Asherslab/propresenter-utilities/main/install.sh | sudo bash -s -- --system
+```
+
+| | macOS | Linux |
+| --- | --- | --- |
+| App | `/usr/local/propresenter-utilities` | `/opt/propresenter-utilities` |
+| Service | `/Library/LaunchDaemons/com.propresenter.utilities.plist` | `/etc/systemd/system/propresenter-utilities.service` |
+| Logs | `/Library/Logs/propresenter-utilities.log` | `journalctl -u propresenter-utilities` |
+| Config (new installs) | `/Library/Application Support/propresenter-utilities/config.json` | `/var/lib/propresenter-utilities/config.json` |
+
+The service runs as root, so its control panel is the same unauthenticated one; keep it on loopback
+unless you mean otherwise (see [Network exposure](#network-exposure)). Use one mode or the other. The
+installer replaces existing installs only within its own mode: daemons with `--system`, your own
+agents without it. If it finds the other kind holding the port, it says so and stops.
+
+The installer refuses to run as root without `--system`, since a per-user service for root is
+never what's meant.
+
+**Replacing an existing install (macOS).** The installer looks in `~/Library/LaunchAgents` (or, with
+`--system`, `/Library/LaunchDaemons`) for any other agent that runs `ProPresenter.App` or `ProPresenter.App.dll`, for example one created by hand
 or by an IDE deployment. It then:
 
-1. Takes that agent's `--urls`/`--config` settings, from its environment or arguments. If it has none,
-   the defaults match what the app uses anyway, so the same rules file is kept.
+1. Takes that agent's `--urls`/`--config` settings, from its environment or arguments. If it sets no
+   config path, the installer uses the one the app would have used: the `.config` folder in the
+   home directory of the user it runs as. For a daemon with no `UserName`, that's root's,
+   `/var/root/.config/propresenter-utilities/config.json`. If no file is there, it stops without
+   changing anything, rather than start the new install on an empty profile.
 2. Stops it, and moves its plist to `~/Library/Application Support/propresenter-utilities/replaced-agents/`.
    Its program files are left in place.
 3. Installs and starts the new service. If that fails on a first install, it removes the new service
