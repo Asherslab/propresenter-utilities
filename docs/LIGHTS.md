@@ -107,8 +107,9 @@ on its `presentation` transport layer.
    - it stops at its end: end action *Stop*, or a rewind to the start.
 
    Pausing mid-video does **not** count. A looping video keeps the lights off until it's cleared.
-3. **Lights on**, 0.3 seconds later. If the next cue is another lights-off video, its macro lands
-   inside that window and the lights simply stay off, with no flash.
+3. **Lights on** after the action's **Back on after** time, 0.3 seconds by default (0–10s, fractions
+   allowed). If the next cue is another lights-off video, its macro lands inside that window and the
+   lights simply stay off, with no flash. Lengthen it if a cue's next video takes longer to start.
 
 If ProPresenter doesn't answer a poll, that reading is skipped, never taken as the video ending.
 

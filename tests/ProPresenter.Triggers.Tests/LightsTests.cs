@@ -63,6 +63,22 @@ public class LightsTests
         Assert.Null(ShellyClient.ParseSetManyResponse([0, 1, 2, 3], status, body));
     }
 
+    [Theory]
+    [InlineData("0.3", 300)]
+    [InlineData(" 1.25 ", 1250)]
+    [InlineData("0", 0)]
+    [InlineData("-2", 0)]
+    [InlineData("60", 10000)]
+    [InlineData(null, 300)]
+    [InlineData("", 300)]
+    [InlineData("soon", 300)]
+    public void Restore_delay_accepts_fractions_and_is_clamped(string? value, double expectedMs)
+    {
+        var delay = LightsController.ParseDuration(value, TimeSpan.FromSeconds(0.3), TimeSpan.FromSeconds(10));
+
+        Assert.Equal(expectedMs, delay.TotalMilliseconds, precision: 3);
+    }
+
     [Fact]
     public void All_means_the_configured_outputs()
     {

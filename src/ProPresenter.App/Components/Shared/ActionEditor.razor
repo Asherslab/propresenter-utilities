@@ -131,6 +131,17 @@
                 builder.CloseElement();
                 break;
 
+            case ParameterKind.Duration:
+                builder.OpenElement(0, "input");
+                builder.AddAttribute(1, "type", "number");
+                builder.AddAttribute(2, "min", "0");
+                builder.AddAttribute(3, "step", "0.05");
+                builder.AddAttribute(4, "value", value);
+                builder.AddAttribute(5, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(
+                    this, e => SetArgument(action, parameter.Key, e.Value?.ToString() ?? "0")));
+                builder.CloseElement();
+                break;
+
             case ParameterKind.Text:
                 builder.OpenElement(0, "input");
                 builder.AddAttribute(1, "type", "text");

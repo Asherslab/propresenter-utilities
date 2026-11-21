@@ -522,6 +522,9 @@ public static class ActionCatalog
                     "Once the video's length is known the relay is told to come back on by itself this long after "
                     + "the video should finish, in case this app or ProPresenter goes away. 0 = no failsafe. Off by default "
                     + "until the relay's flip-back behaviour is confirmed — see docs/LIGHTS.md.", "0"),
+                new ActionParameter("restore_delay", "Back on after (s)", ParameterKind.Duration,
+                    "How long after the video ends the lights come back. A lights-off video cued within this time "
+                    + "keeps them off without a flash. Up to 10s.", "0.3"),
                 order,
             ],
             Target: ActionTarget.Lights));

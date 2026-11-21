@@ -36,17 +36,21 @@ public sealed class LightsController(
     public const string VideoLayer = "presentation";
 
     /// <summary>
-    /// How long an ended video waits before the lights come up. A video cut straight into another
-    /// lights-off video re-arms within this window, so the room does not flash. Kept short because it
-    /// is felt in the room: the next cue's macro arrives over RossTalk within milliseconds.
+    /// How long an ended video waits before the lights come up, unless the action says otherwise. A
+    /// video cut straight into another lights-off video re-arms within this window, so the room does
+    /// not flash. Kept short because it is felt in the room: the next cue's macro arrives over
+    /// RossTalk within milliseconds.
     /// </summary>
-    internal static readonly TimeSpan RestoreDelay = TimeSpan.FromSeconds(0.3);
+    internal static readonly TimeSpan DefaultRestoreDelay = TimeSpan.FromSeconds(0.3);
+
+    private static readonly TimeSpan MaxRestoreDelay = TimeSpan.FromSeconds(10);
 
     private readonly Lock _gate = new();
     private readonly VideoLatch _latch = new();
 
     private IReadOnlyList<int> _latchChannels = [];
     private bool _latchOrdered = true;
+    private TimeSpan _latchRestoreDelay = DefaultRestoreDelay;
     private TimeSpan _failsafeMargin;
     private CancellationTokenSource? _pendingRestore;
     private bool? _lastCommandedOn;
@@ -103,7 +107,9 @@ public sealed class LightsController(
             "lights.set" => await SetAsync(
                 string.Equals(invocation.Arguments.GetValueOrDefault("state"), "on", StringComparison.OrdinalIgnoreCase),
                 channels, failsafe, summary, ordered, ct),
-            "lights.off_for_video" => await OffForVideoAsync(channels, failsafe, summary, ordered, ct),
+            "lights.off_for_video" => await OffForVideoAsync(channels, failsafe,
+                ParseDuration(invocation.Arguments.GetValueOrDefault("restore_delay"), DefaultRestoreDelay, MaxRestoreDelay),
+                summary, ordered, ct),
             _ => new ActionOutcome(false, summary, $"Unknown lights action '{definition.Id}'."),
         };
     }
@@ -165,6 +171,7 @@ public sealed class LightsController(
     private async Task<ActionOutcome> OffForVideoAsync(
         IReadOnlyList<int> channels,
         TimeSpan failsafeMargin,
+        TimeSpan restoreDelay,
         string summary,
         bool ordered,
         CancellationToken ct)
@@ -179,6 +186,7 @@ public sealed class LightsController(
             _latch.Arm(DateTimeOffset.Now, baseline);
             _latchChannels = channels;
             _latchOrdered = ordered;
+            _latchRestoreDelay = restoreDelay;
             _failsafeMargin = failsafeMargin;
         }
 
@@ -198,6 +206,7 @@ public sealed class LightsController(
         IReadOnlyList<int> channels;
         bool ordered;
         TimeSpan margin;
+        TimeSpan restoreDelay;
 
         lock (_gate)
         {
@@ -205,6 +214,7 @@ public sealed class LightsController(
             channels = _latchChannels;
             ordered = _latchOrdered;
             margin = _failsafeMargin;
+            restoreDelay = _latchRestoreDelay;
         }
 
         switch (latchEvent.Kind)
@@ -228,18 +238,18 @@ public sealed class LightsController(
 
             case LatchEventKind.Ended:
                 activity.Info($"'{latchEvent.Video!.Name}' ended — {latchEvent.Reason}");
-                ScheduleRestore(channels, ordered, $"'{latchEvent.Video.Name}' ended");
+                ScheduleRestore(channels, ordered, restoreDelay, $"'{latchEvent.Video.Name}' ended");
                 break;
 
             case LatchEventKind.GaveUp:
                 activity.Warning("Lights back on: " + latchEvent.Reason,
                     $"Check that this video plays on the {VideoLayer} layer, and look at the Activity page.");
-                ScheduleRestore(channels, ordered, "no video found");
+                ScheduleRestore(channels, ordered, restoreDelay, "no video found");
                 break;
         }
     }
 
-    private void ScheduleRestore(IReadOnlyList<int> channels, bool ordered, string reason)
+    private void ScheduleRestore(IReadOnlyList<int> channels, bool ordered, TimeSpan delay, string reason)
     {
         CancellationTokenSource cts;
         lock (_gate)
@@ -254,7 +264,7 @@ public sealed class LightsController(
         {
             try
             {
-                await Task.Delay(RestoreDelay, cts.Token);
+                await Task.Delay(delay, cts.Token);
             }
             catch (OperationCanceledException)
             {
@@ -354,6 +364,19 @@ public sealed class LightsController(
         }
 
         return channels.Count > 0 ? channels : throw new FormatException("No relay outputs to switch.");
+    }
+
+    /// <summary>Fractional seconds, clamped to 0–<paramref name="max"/>; anything unreadable is <paramref name="fallback"/>.</summary>
+    internal static TimeSpan ParseDuration(string? value, TimeSpan fallback, TimeSpan max)
+    {
+        if (!double.TryParse(value?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds)
+            || double.IsNaN(seconds) || double.IsInfinity(seconds))
+        {
+            return fallback;
+        }
+
+        var duration = TimeSpan.FromSeconds(Math.Max(0, seconds));
+        return duration > max ? max : duration;
     }
 
     private static TimeSpan ParseSeconds(string? value) =>

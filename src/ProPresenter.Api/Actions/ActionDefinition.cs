@@ -15,6 +15,9 @@ public enum ParameterKind
     /// <summary>Signed whole number of seconds.</summary>
     Seconds,
 
+    /// <summary>Non-negative seconds that may be fractional, such as <c>0.3</c>.</summary>
+    Duration,
+
     /// <summary>Boolean, rendered as a switch.</summary>
     Boolean,
 
@@ -50,7 +53,7 @@ public sealed record ActionParameter(
     IReadOnlyList<string>? Choices = null)
 {
     public bool IsLookup => Kind is not (ParameterKind.Text or ParameterKind.Integer or ParameterKind.Seconds
-        or ParameterKind.Boolean or ParameterKind.Choice or ParameterKind.Json);
+        or ParameterKind.Duration or ParameterKind.Boolean or ParameterKind.Choice or ParameterKind.Json);
 }
 
 /// <summary>Where the request payload comes from, for the handful of actions that need one.</summary>

@@ -238,7 +238,7 @@ output on firmware without it). See [LIGHTS.md](LIGHTS.md).
 | Action | What it does |
 | --- | --- |
 | Turn lights on / off | Switches the chosen outputs, optionally telling the relay to flip back by itself after a number of seconds. Cancels a pending "lights off for this video". |
-| Lights off for this video | Turns the lights off, then back on when the video on the presentation transport layer ends. |
+| Lights off for this video | Turns the lights off, then back on when the video on the presentation transport layer ends, after its **Back on after** time (0.3s by default). |
 
 Both have an **Order** option: *in order* follows the configured
 [order](LIGHTS.md#order-switching-in-batches), and *all together* switches every output at once.
